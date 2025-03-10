@@ -1,11 +1,13 @@
-const std = @import("std");
+const types = @import("types.zig");
 
-pub fn get_bit(bitboard: u64, square: u16) bool {
-    return (bitboard & (1 << square)) != 0;
+pub inline fn set_bit(bitboard: u64, s: types.square) u64 {
+    return (bitboard | (@as(u64, 1) << @intCast(@intFromEnum(s))));
 }
 
-pub const Square = enum(u7) {
-    pub inline fn fromInt(square: usize) Square {
-        return @enumFromInt(square);
-    }
-};
+pub inline fn get_bit(bitboard: u64, square: usize) bool {
+    return (bitboard & @as(u64, 1) << @intCast(square)) != 0;
+}
+
+pub inline fn clear_bit(bitboard: u64, s: types.square) u64 {
+    return (bitboard & ~(@as(u64, 1) << @intCast(@intFromEnum(s))));
+}
