@@ -28,35 +28,25 @@ pub const Direction = enum(i32) {
     North = 8,
     NorthEast = 9,
     East = 1,
-    SouthEast = -7,
-    South = -8,
-    SouthWest = -9,
-    West = -1,
+    SouthEast = 7,
+    South = 8,
+    SouthWest = 9,
+    West = 1,
     NorthWest = 7,
 
     // Double Push
     NorthNorth = 16,
-    SouthSouth = -16,
+    SouthSouth = 16,
 };
 
-pub const MaskFile = [_]Bitboard{
-    0x101010101010101,  0x202020202020202,  0x404040404040404,  0x808080808080808,
-    0x1010101010101010, 0x2020202020202020, 0x4040404040404040, 0x8080808080808080,
+// prevent bits from wrapping around the bord example form a1 to h2
+pub const MaskFile = enum(u64) {
+    AFILE = 0x0101010101010101, // file A: a1, a2, ... a8
+    BFILE = 0x0202020202020202, // file B: b1, b2, ... b8
+    CFILE = 0x0404040404040404, // file C: c1, c2, ... c8
+    DFILE = 0x0808080808080808, // file D: d1, d2, ... d8
+    EFILE = 0x1010101010101010, // file E: e1, e2, ... e8
+    FFILE = 0x2020202020202020, // file F: f1, f2, ... f8
+    GFILE = 0x4040404040404040, // file G: g1, g2, ... g8
+    HFILE = 0x8080808080808080, // file H: h1, h2, ... h8
 };
-
-// Attacking shifting moves
-//
-pub inline fn shift_bitboard(x: Bitboard, comptime d: Direction) Bitboard {
-    return switch (d) {
-        Direction.North => x << 8,
-        Direction.South => x >> 8,
-        Direction.NorthNorth => x << 16,
-        Direction.SouthSouth => x >> 16,
-        Direction.East => (x & ~MaskFile[@enumToInt(File.HFILE)]) << 1,
-        Direction.West => (x & ~MaskFile[@enumToInt(File.AFILE)]) >> 1,
-        Direction.NorthEast => (x & ~MaskFile[@enumToInt(File.HFILE)]) << 9,
-        Direction.NorthWest => (x & ~MaskFile[@enumToInt(File.AFILE)]) << 7,
-        Direction.SouthEast => (x & ~MaskFile[@enumToInt(File.HFILE)]) >> 7,
-        Direction.SouthWest => (x & ~MaskFile[@enumToInt(File.AFILE)]) >> 9,
-    };
-}
