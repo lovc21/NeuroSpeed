@@ -50,3 +50,14 @@ pub const MaskFile = enum(u64) {
     GFILE = 0x4040404040404040, // file G: g1, g2, ... g8
     HFILE = 0x8080808080808080, // file H: h1, h2, ... h8
 };
+
+// bit counting routine
+/// Fastest population count, using hardware acceleration if available
+pub inline fn popcount(n: u64) u32 {
+    return @popCount(n);
+}
+
+// get the last bit
+pub inline fn lsb_index(n: u64) u6 {
+    return @ctz(n);
+}

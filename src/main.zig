@@ -3,7 +3,7 @@ const print = std.debug.print;
 const bitboard = @import("bitboard.zig");
 const types = @import("types.zig");
 const util = @import("util.zig");
-const table_attacks = @import("table_attacks.zig");
+const attacks = @import("attacks.zig");
 pub fn main() !void {
     var stdout = std.io.getStdOut().writer();
     // test bitbord print funcion
@@ -47,13 +47,28 @@ pub fn main() !void {
     //     try stdout.print("Square {d}: 0x{x}\n", .{ i, king_attacks });
     // }
 
-    try stdout.print("\nKnight Attacks:\n", .{});
+    // try stdout.print("\nKnight Attacks:\n", .{});
+    // for (0..types.number_of_squares) |i| {
+    //     const sq: types.square = @enumFromInt(i);
+    //     var bb: types.Bitboard = 0;
+    //     bb = util.set_bit(bb, sq);
+    //     const knight_attacks = table_attacks.knight_attacks_from_bitboard(bb);
+    //     //try bitboard.print_board(knight_attacks);
+    //     try stdout.print("Square {d}: 0x{x}\n", .{ i, knight_attacks });
+    // }
+
     for (0..types.number_of_squares) |i| {
         const sq: types.square = @enumFromInt(i);
         var bb: types.Bitboard = 0;
         bb = util.set_bit(bb, sq);
-        const knight_attacks = table_attacks.knight_attacks_from_bitboard(bb);
-        //try bitboard.print_board(knight_attacks);
-        try stdout.print("Square {d}: 0x{x}\n", .{ i, knight_attacks });
+        print("hello", .{});
+        const maskbishop = attacks.rook_attack_mask_from_bitboard(bb);
+        try bitboard.print_board(maskbishop);
+        try stdout.print("Square {d}: 0x{x}\n", .{ i, maskbishop });
     }
+
+    const bb: types.Bitboard = 21; // Example bitboard
+    const result = types.popcount(bb);
+    try bitboard.print_board(bb);
+    print("Population count: {d}\n", .{result});
 }
