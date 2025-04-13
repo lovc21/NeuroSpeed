@@ -7,6 +7,7 @@ pub const empty_Bitboard: Bitboard = 0;
 // the number of squares on a chess board
 pub const number_of_squares = 64;
 
+// Little endian rank-file (LERF) mapping
 pub const square = enum {
     // zig fmt: off
     a1, b1, c1, d1, e1, f1, g1, h1,
@@ -19,6 +20,17 @@ pub const square = enum {
     a8, b8, c8, d8, e8, f8, g8, h8,
     NO_SQUARE,
     // zig fmt: on
+};
+
+pub const square_number = [_]usize{
+    0,  1,  2,  3,  4,  5,  6,  7,
+    8,  9,  10, 11, 12, 13, 14, 15,
+    16, 17, 18, 19, 20, 21, 22, 23,
+    24, 25, 26, 27, 28, 29, 30, 31,
+    32, 33, 34, 35, 36, 37, 38, 39,
+    40, 41, 42, 43, 44, 45, 46, 47,
+    48, 49, 50, 51, 52, 53, 54, 55,
+    56, 57, 58, 59, 60, 61, 62, 63,
 };
 
 pub const Color = enum {
@@ -53,14 +65,3 @@ pub const MaskFile = enum(u64) {
     GFILE = 0x4040404040404040, // file G: g1, g2, ... g8
     HFILE = 0x8080808080808080, // file H: h1, h2, ... h8
 };
-
-// bit counting routine
-/// Fastest population count, using hardware acceleration if available
-pub inline fn popcount(n: u64) u32 {
-    return @popCount(n);
-}
-
-// get the last bit
-pub inline fn lsb_index(n: u64) u6 {
-    return @ctz(n);
-}

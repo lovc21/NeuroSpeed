@@ -14,7 +14,7 @@ pub inline fn clear_bit(bitboard: u64, s: types.square) u64 {
 
 // bit counting routine
 /// Fastest population count, using hardware acceleration if available
-pub inline fn popcount(n: u64) u32 {
+pub inline fn popcount(n: u64) u7 {
     return @popCount(n);
 }
 

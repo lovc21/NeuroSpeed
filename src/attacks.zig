@@ -1,6 +1,8 @@
 const types = @import("types.zig");
 const std = @import("std");
 const print = std.debug.print;
+const tabele = @import("tabeles.zig");
+const util = @import("util.zig");
 
 pub inline fn rook_attack_mask_from_bitboard(bb: types.Bitboard) types.Bitboard {
     var attacks: u64 = 0;
@@ -94,7 +96,7 @@ pub inline fn knight_attacks_from_bitboard(bb: types.Bitboard) types.Bitboard {
         ((bb >> 10) & ~(@intFromEnum(types.MaskFile.HFILE) | @intFromEnum(types.MaskFile.GFILE))));
 }
 
-// generate king attacks tabele
+// generate king attacks tabelRook_attacks_shiftse
 pub inline fn king_attacks_from_bitboard(bb: types.Bitboard) types.Bitboard {
     return (bb << 8) |
         (bb >> 8) |
@@ -112,4 +114,26 @@ pub inline fn pawn_attacks_from_bitboard(comptime color: types.Color, bb: types.
         ((bb & ~(@intFromEnum(types.MaskFile.AFILE))) << 7) | ((bb & ~(@intFromEnum(types.MaskFile.HFILE))) << 9)
     else
         ((bb & ~(@intFromEnum(types.MaskFile.AFILE))) >> 9) | ((bb & ~(@intFromEnum(types.MaskFile.HFILE))) >> 7);
+}
+
+// generate rook magice Bitboards
+var Rook_attacks: [64][4096]types.Bitboard align(64) = std.mem.zeroes([64][4096]u64);
+var Rook_attacks_shifts: [64]i32 = std.mem.zeroes([64]i32);
+
+pub inline fn init_rook_attackes() void {
+    for (types.square_number) |square| {
+        // const maske = tabele.Rook_attackes_tabele;
+        Rook_attacks_shifts[square] = 64 - util.popcount(tabele.Rook_attackes_tabele[square]);
+    }
+}
+
+//  bishop magice Bitboards
+var bishop_attacks: [64][4096]types.Bitboard align(64) = std.mem.zeroes([64][4096]u64);
+var bishop_attacks_shifts: [64]i32 = std.mem.zeroes([64]i32);
+
+pub inline fn init_bishop_attackes() void {
+    for (types.square_number) |square| {
+        // const maske = tabele.Rook_attackes_tabele;
+        Rook_attacks_shifts[square] = 64 - util.popcount(tabele.Bishops_attackes_tabele[square]);
+    }
 }
