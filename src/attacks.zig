@@ -47,7 +47,6 @@ pub inline fn bishop_attack_mask_from_bitboard(bb: types.Bitboard) types.Bitboar
     const file: i64 = @intCast(square_index % 8);
     const one: types.Bitboard = 1;
 
-    // upper right diagonal: increasing rank and file until just before the board edge
     var r: i64 = rank + 1;
     var f: i64 = file + 1;
     while (r <= 6 and f <= 6) {
@@ -56,7 +55,6 @@ pub inline fn bishop_attack_mask_from_bitboard(bb: types.Bitboard) types.Bitboar
         f += 1;
     }
 
-    // lower right diagonal: decreasing rank, increasing file
     r = rank - 1;
     f = file + 1;
     while (r >= 1 and f <= 6) {
@@ -65,7 +63,6 @@ pub inline fn bishop_attack_mask_from_bitboard(bb: types.Bitboard) types.Bitboar
         f += 1;
     }
 
-    // upper left diagonal: increasing rank, decreasing file
     r = rank + 1;
     f = file - 1;
     while (r <= 6 and f >= 1) {
@@ -74,7 +71,6 @@ pub inline fn bishop_attack_mask_from_bitboard(bb: types.Bitboard) types.Bitboar
         f -= 1;
     }
 
-    // lower left diagonal: decreasing rank and file
     r = rank - 1;
     f = file - 1;
     while (r >= 1 and f >= 1) {
@@ -86,7 +82,7 @@ pub inline fn bishop_attack_mask_from_bitboard(bb: types.Bitboard) types.Bitboar
     return attacks;
 }
 
-// generate king attacks tabele
+// generate knight attacks tabele
 pub inline fn knight_attacks_from_bitboard(bb: types.Bitboard) types.Bitboard {
     return (((bb << 17) & ~@intFromEnum(types.MaskFile.AFILE)) |
         ((bb << 15) & ~@intFromEnum(types.MaskFile.HFILE)) |

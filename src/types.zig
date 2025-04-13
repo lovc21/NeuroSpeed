@@ -1,5 +1,8 @@
-// empty Bitboard
+// Bitboard type
 pub const Bitboard = u64;
+
+// empty Bitboard
+pub const empty_Bitboard: Bitboard = 0;
 
 // the number of squares on a chess board
 pub const number_of_squares = 64;

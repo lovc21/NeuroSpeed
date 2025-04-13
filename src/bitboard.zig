@@ -2,7 +2,7 @@ const std = @import("std");
 const util = @import("util.zig");
 const print = std.debug.print;
 
-pub fn print_board(bitboard: u64) !void {
+pub fn print_board(bitboard: u64) void {
     print("\n", .{});
     for (0..8) |rank| {
         print("  {} ", .{8 - rank});
