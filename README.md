@@ -3,11 +3,11 @@
     <img src="https://github.com/lovc21/NeroSpeed/blob/main/.docs/img/nerospeed.jpg"
          width="400" height="400" alt="Nero speed image">
 </div>
-//
 
 <div align="center">
 NeuroSpeed is a UCI chess engine that is optimized for extreme time controls. The goal of this chess engine is to see what can be optimized so it can beat other chess engines when it comes to low time, for example, bullet games or ultra-bullet games.
 </div>
+
 ## Releases
 
 This chess engine is still in development. When I have it in working order and with some results, I will release it as version 1 (v1)
