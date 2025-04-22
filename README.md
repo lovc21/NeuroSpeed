@@ -40,7 +40,7 @@ This chess engine is still in development. When I have it in working order and w
 
 ## Thanks and Acknowledgements
 
-- Huge shout-out to [Maksim Korzh](<<https://github.com/maksimKorzh>) for his [chess programming series](https://www.youtube.com/playlist?list=PLmN0neTso3Jxh8ZIylk74JpwfiWNI76Cs). It's a great help in explaining complex topics in chess engine development.
+- Huge shout-out to [Maksim Korzh](https://github.com/maksimKorzh) for his [chess programming series](https://www.youtube.com/playlist?list=PLmN0neTso3Jxh8ZIylk74JpwfiWNI76Cs). It's a great help in explaining complex topics in chess engine development.
 - Big thanks to the [Avalanche](https://github.com/SnowballSH/Avalanche) chess engine and [Lambergar](https://github.com/jabolcni/Lambergar) chess engine, where I got a lot of inspiration and a better idea of how to write Zig code, as these chess engines were implemented in Zig.
 - Huge shout-out to the [Stockfish Discord](https://discord.com/invite/GWDRS3kU6R) for being helpful when it comes to questions, and to the [Stockfish](https://github.com/official-stockfish/Stockfish) engine for its great implementation and clean code
 - And just like 99% of chess engines, a big thanks to the [Chess Programming Wiki](https://www.chessprogramming.org/Main_Page) for being such a well-structured base of knowledge when it comes to chess engine design
