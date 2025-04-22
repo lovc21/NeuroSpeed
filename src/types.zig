@@ -65,3 +65,131 @@ pub const MaskFile = enum(u64) {
     GFILE = 0x4040404040404040, // file G: g1, g2, ... g8
     HFILE = 0x8080808080808080, // file H: h1, h2, ... h8
 };
+
+pub const mask_file: [8]u64 = .{
+    @intFromEnum(MaskFile.AFILE),
+    @intFromEnum(MaskFile.BFILE),
+    @intFromEnum(MaskFile.CFILE),
+    @intFromEnum(MaskFile.DFILE),
+    @intFromEnum(MaskFile.EFILE),
+    @intFromEnum(MaskFile.FFILE),
+    @intFromEnum(MaskFile.GFILE),
+    @intFromEnum(MaskFile.HFILE),
+};
+
+pub const MaskRank = enum(u64) {
+    RANK1 = 0x00000000000000FF, // rank 1: a1..h1
+    RANK2 = 0x000000000000FF00, // rank 2: a2..h2
+    RANK3 = 0x0000000000FF0000, // rank 3: a3..h3
+    RANK4 = 0x00000000FF000000, // rank 4: a4..h4
+    RANK5 = 0x000000FF00000000, // rank 5: a5..h5
+    RANK6 = 0x0000FF0000000000, // rank 6: a6..h6
+    RANK7 = 0x00FF000000000000, // rank 7: a7..h7
+    RANK8 = 0xFF00000000000000, // rank 8: a8..h8
+};
+
+pub const mask_rank: [8]u64 = .{
+    @intFromEnum(MaskRank.RANK1),
+    @intFromEnum(MaskRank.RANK2),
+    @intFromEnum(MaskRank.RANK3),
+    @intFromEnum(MaskRank.RANK4),
+    @intFromEnum(MaskRank.RANK5),
+    @intFromEnum(MaskRank.RANK6),
+    @intFromEnum(MaskRank.RANK7),
+    @intFromEnum(MaskRank.RANK8),
+};
+
+// Precomputed diagonal masks
+pub const MaskDiagonalNWSE = enum(u64) {
+    DIAGONAL1 = 0x0000000000000080, // a2-h8 diagonal starting at b1
+    DIAGONAL2 = 0x0000000000008040,
+    DIAGONAL3 = 0x0000000000804020,
+    DIAGONAL4 = 0x0000000080402010,
+    DIAGONAL5 = 0x0000008040201008,
+    DIAGONAL6 = 0x0000804020100804,
+    DIAGONAL7 = 0x0080402010080402,
+    DIAGONAL8 = 0x8040201008040201,
+    DIAGONAL9 = 0x4020100804020100,
+    DIAGONAL10 = 0x2010080402010000,
+    DIAGONAL11 = 0x1008040201000000,
+    DIAGONAL12 = 0x0804020100000000,
+    DIAGONAL13 = 0x0402010000000000,
+    DIAGONAL14 = 0x0201000000000000,
+    DIAGONAL15 = 0x0100000000000000,
+};
+
+pub const mask_diagonal_nw_se: [15]u64 = .{
+    @intFromEnum(MaskDiagonalNWSE.DIAGONAL1),
+    @intFromEnum(MaskDiagonalNWSE.DIAGONAL2),
+    @intFromEnum(MaskDiagonalNWSE.DIAGONAL3),
+    @intFromEnum(MaskDiagonalNWSE.DIAGONAL4),
+    @intFromEnum(MaskDiagonalNWSE.DIAGONAL5),
+    @intFromEnum(MaskDiagonalNWSE.DIAGONAL6),
+    @intFromEnum(MaskDiagonalNWSE.DIAGONAL7),
+    @intFromEnum(MaskDiagonalNWSE.DIAGONAL8),
+    @intFromEnum(MaskDiagonalNWSE.DIAGONAL9),
+    @intFromEnum(MaskDiagonalNWSE.DIAGONAL10),
+    @intFromEnum(MaskDiagonalNWSE.DIAGONAL11),
+    @intFromEnum(MaskDiagonalNWSE.DIAGONAL12),
+    @intFromEnum(MaskDiagonalNWSE.DIAGONAL13),
+    @intFromEnum(MaskDiagonalNWSE.DIAGONAL14),
+    @intFromEnum(MaskDiagonalNWSE.DIAGONAL15),
+};
+
+// Precomputed anti-diagonal masks
+pub const MaskAntiDiagonalNESW = enum(u64) {
+    ANTIDIAG1 = 0x0000000000000001,
+    ANTIDIAG2 = 0x0000000000000102,
+    ANTIDIAG3 = 0x0000000000010204,
+    ANTIDIAG4 = 0x0000000001020408,
+    ANTIDIAG5 = 0x0000000102040810,
+    ANTIDIAG6 = 0x0000010204081020,
+    ANTIDIAG7 = 0x0001020408102040,
+    ANTIDIAG8 = 0x0102040810204080,
+    ANTIDIAG9 = 0x2040810204080000,
+    ANTIDIAG10 = 0x4081020408000000,
+    ANTIDIAG11 = 0x8102040800000000,
+    ANTIDIAG12 = 0x1020408000000000,
+    ANTIDIAG13 = 0x2040800000000000,
+    ANTIDIAG14 = 0x4080000000000000,
+    ANTIDIAG15 = 0x8000000000000000,
+};
+
+pub const mask_anti_diagonal_ne_sw: [15]u64 = .{
+    @intFromEnum(MaskAntiDiagonalNESW.ANTIDIAG1),
+    @intFromEnum(MaskAntiDiagonalNESW.ANTIDIAG2),
+    @intFromEnum(MaskAntiDiagonalNESW.ANTIDIAG3),
+    @intFromEnum(MaskAntiDiagonalNESW.ANTIDIAG4),
+    @intFromEnum(MaskAntiDiagonalNESW.ANTIDIAG5),
+    @intFromEnum(MaskAntiDiagonalNESW.ANTIDIAG6),
+    @intFromEnum(MaskAntiDiagonalNESW.ANTIDIAG7),
+    @intFromEnum(MaskAntiDiagonalNESW.ANTIDIAG8),
+    @intFromEnum(MaskAntiDiagonalNESW.ANTIDIAG9),
+    @intFromEnum(MaskAntiDiagonalNESW.ANTIDIAG10),
+    @intFromEnum(MaskAntiDiagonalNESW.ANTIDIAG11),
+    @intFromEnum(MaskAntiDiagonalNESW.ANTIDIAG12),
+    @intFromEnum(MaskAntiDiagonalNESW.ANTIDIAG13),
+    @intFromEnum(MaskAntiDiagonalNESW.ANTIDIAG14),
+    @intFromEnum(MaskAntiDiagonalNESW.ANTIDIAG15),
+};
+
+//Precomputed square masks
+pub const squar_bb = [_]u64{
+    0x1,                0x2,                0x4,                0x8,
+    0x10,               0x20,               0x40,               0x80,
+    0x100,              0x200,              0x400,              0x800,
+    0x1000,             0x2000,             0x4000,             0x8000,
+    0x10000,            0x20000,            0x40000,            0x80000,
+    0x100000,           0x200000,           0x400000,           0x800000,
+    0x1000000,          0x2000000,          0x4000000,          0x8000000,
+    0x10000000,         0x20000000,         0x40000000,         0x80000000,
+    0x100000000,        0x200000000,        0x400000000,        0x800000000,
+    0x1000000000,       0x2000000000,       0x4000000000,       0x8000000000,
+    0x10000000000,      0x20000000000,      0x40000000000,      0x80000000000,
+    0x100000000000,     0x200000000000,     0x400000000000,     0x800000000000,
+    0x1000000000000,    0x2000000000000,    0x4000000000000,    0x8000000000000,
+    0x10000000000000,   0x20000000000000,   0x40000000000000,   0x80000000000000,
+    0x100000000000000,  0x200000000000000,  0x400000000000000,  0x800000000000000,
+    0x1000000000000000, 0x2000000000000000, 0x4000000000000000, 0x8000000000000000,
+    0x0,
+};

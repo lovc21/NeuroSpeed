@@ -1,4 +1,5 @@
 const std = @import("std");
+const tabele = @import("tabeles.zig");
 const types = @import("types.zig");
 const attacks = @import("attacks.zig");
 const bitboard = @import("bitboard.zig");
@@ -97,4 +98,59 @@ test "PRNG produces expected first value for seed 0x123456789ABCDEF" {
     const first = prng.rand64();
     std.debug.print("First output: {d}\n", .{first});
     try expect(first == 8976943199460683916);
+}
+
+test "rook attacks table with empty occupancy" {
+    attacks.init_rook_attackes();
+    for (types.square_number) |square| {
+        const sq6: u6 = @truncate(square);
+        const expected = attacks.get_rook_attacks_for_init(sq6, 0);
+        const table_val = attacks.Rook_attacks[square][0];
+        print("Rook attacks for square {d} with empty occ: expected=0x{X}, got=0x{X}\n", .{ square, expected, table_val });
+        try std.testing.expectEqual(@as(types.Bitboard, expected), table_val);
+    }
+}
+
+test "rook attacks with one blocker" {
+    attacks.init_rook_attackes();
+    const sq_idx: u8 = 27;
+    const occ_single: u64 = (@as(u64, 1) << (3 + 5 * 8)); // blocker on d6
+    const occ_masked = occ_single & tabele.Rook_attackes_tabele[sq_idx];
+    const relevantBits = tabele.Rook_index_bit[sq_idx];
+    const magic = tabele.rook_magics[sq_idx];
+    const shift8: u8 = 64 - relevantBits;
+    const shift: u6 = @truncate(shift8);
+    const idx = (@as(u64, occ_masked) *% magic) >> shift;
+    const table_attacks = attacks.Rook_attacks[sq_idx][@intCast(idx)];
+    const expected = attacks.get_rook_attacks_for_init(@as(u6, sq_idx), occ_single);
+    print("Rook attacks with blocker on square {d}: occ=0x{X}, idx={d}, table=0x{X}, expected=0x{X}\n", .{ sq_idx, occ_single, idx, table_attacks, expected });
+    try std.testing.expectEqual(@as(types.Bitboard, expected), table_attacks);
+}
+
+test "bishop attacks table with empty occupancy" {
+    attacks.init_bishop_attackes();
+    for (types.square_number) |square| {
+        const sq6: u6 = @truncate(square);
+        const expected = attacks.get_bishop_attacks_for_init(sq6, 0);
+        const table_val = attacks.Bishop_attacks[square][0];
+        print("Bishop attacks for square {d} with empty occ: expected=0x{X}, got=0x{X}\n", .{ square, expected, table_val });
+        try std.testing.expectEqual(@as(types.Bitboard, expected), table_val);
+    }
+}
+
+test "bishop attacks with one blocker" {
+    attacks.init_bishop_attackes();
+    const sq_idx: u8 = 27; // d4
+    const occ_single: u64 = (@as(u64, 1) << 45); // blocker on f6
+    const mask = tabele.Bishops_attackes_tabele[sq_idx];
+    const occ_masked = occ_single & mask;
+    const relevantBits = tabele.Bishop_index_bit[sq_idx];
+    const magic = tabele.bishop_magics[sq_idx];
+    const shift: u6 = @truncate(64 - relevantBits);
+    const idx64 = (@as(u64, occ_masked) *% magic) >> shift;
+    const idx: usize = @intCast(idx64);
+    const table_attacks = attacks.Bishop_attacks[sq_idx][idx];
+    const expected = attacks.get_bishop_attacks_for_init(@as(u6, sq_idx), occ_single);
+    print("Bishop attacks with blocker on square {d}: occ=0x{X}, idx={d}, table=0x{X}, expected=0x{X}\n", .{ sq_idx, occ_single, idx, table_attacks, expected });
+    try std.testing.expectEqual(@as(types.Bitboard, expected), table_attacks);
 }
