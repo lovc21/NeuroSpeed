@@ -127,7 +127,7 @@ inline fn reverse64(b: u64) u64 {
 }
 
 // Hyperbola Quintessence Algorithm
-pub inline fn sliding_attacks(sq_idx: u6, occ: u64, mask: u64) u64 {
+pub inline fn sliding_attacks(sq_idx: u8, occ: u64, mask: u64) u64 {
     const occ_masked = occ & mask;
     const bb = types.squar_bb[sq_idx];
     const rev_bb = reverse64(bb);
@@ -139,10 +139,9 @@ pub inline fn sliding_attacks(sq_idx: u6, occ: u64, mask: u64) u64 {
     return ((forward ^ reverse64(backward)) & mask);
 }
 
-pub inline fn get_rook_attacks_for_init(square: u6, occ: u64) u64 {
-    const sq: u8 = @intCast(square);
-    const rankMask: u64 = types.mask_rank[sq / 8];
-    const fileMask: u64 = types.mask_file[sq % 8];
+pub inline fn get_rook_attacks_for_init(square: u8, occ: u64) u64 {
+    const rankMask: u64 = types.mask_rank[square / 8];
+    const fileMask: u64 = types.mask_file[square % 8];
     const horizontalAttacks = sliding_attacks(square, occ, rankMask);
     const verticalAttacks = sliding_attacks(square, occ, fileMask);
     return horizontalAttacks | verticalAttacks;
@@ -157,9 +156,8 @@ pub inline fn init_rook_attackes() void {
         const relevantBits = tabele.Rook_index_bit[square];
         const magic = tabele.rook_magics[square];
 
-        const shift8: u8 = 64 - relevantBits;
-        const shift: u6 = @truncate(shift8);
-        const sq6 = @as(u6, @intCast(square));
+        const shift: u6 = @truncate(64 - relevantBits);
+        const sq6 = @as(u8, @intCast(square));
         var subset: types.Bitboard = mask;
 
         while (true) {
@@ -173,10 +171,10 @@ pub inline fn init_rook_attackes() void {
     }
 }
 
-pub inline fn get_bishop_attacks_for_init(square: u6, occ: u64) u64 {
-    const sq: u8 = @intCast(square);
-    const rank_i8: i8 = @intCast(sq / 8);
-    const file_i8: i8 = @intCast(sq % 8);
+pub inline fn get_bishop_attacks_for_init(square: u8, occ: u64) u64 {
+    const rank_i8: i8 = @intCast(square / 8);
+    const file_i8: i8 = @intCast(square % 8);
+    // TODO fix this
     const diag_i: i8 = rank_i8 - file_i8 + 7;
     const anti_i: i8 = rank_i8 + file_i8;
     const diag_idx: usize = @intCast(diag_i);
@@ -197,9 +195,8 @@ pub inline fn init_bishop_attackes() void {
         const relevantBits = tabele.Bishop_index_bit[square];
         const magic = tabele.bishop_magics[square];
 
-        const shift8: u8 = 64 - relevantBits;
-        const shift: u6 = @truncate(shift8);
-        const sq6 = @as(u6, @intCast(square));
+        const shift: u6 = @truncate(64 - relevantBits);
+        const sq6 = @as(u8, @intCast(square));
         var subset: types.Bitboard = mask;
 
         while (true) {
