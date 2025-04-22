@@ -1,5 +1,5 @@
 <div align="center">
-    <h1>NeroSpeed</h1>
+    <h1>NeuroSpeed</h1>
     <img src="https://github.com/lovc21/NeroSpeed/blob/main/.docs/img/nerospeed.jpg"
          width="400" height="400" alt="Nero speed image">
 </div>
