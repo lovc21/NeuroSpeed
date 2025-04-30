@@ -33,10 +33,90 @@ pub const square_number = [_]usize{
     56, 57, 58, 59, 60, 61, 62, 63,
 };
 
+pub const PieceString = "PNBRQK~>pnbrqk.";
+
 pub const Color = enum {
     White,
     Black,
+    both,
 };
+
+pub const PieceType = enum(u8) {
+    Pawn,
+    Knight,
+    Bishop,
+    Rook,
+    Queen,
+    King,
+};
+
+pub const Piece = enum(u8) {
+    WHITE_PAWN,
+    WHITE_KNIGHT,
+    WHITE_BISHOP,
+    WHITE_ROOK,
+    WHITE_QUEEN,
+    WHITE_KING,
+    BLACK_PAWN,
+    BLACK_KNIGHT,
+    BLACK_BISHOP,
+    BLACK_ROOK,
+    BLACK_QUEEN,
+    BLACK_KING,
+    NO_PIECE,
+};
+
+pub const unicodePice = &[_][]const u8{
+    // zig fmt: off
+    "♟︎", "♞", "♝", "♜", "♛", "♚",
+    "♙", "♘", "♗", "♖", "♕", "♔", ".",
+    // zig fmt: on
+};
+
+pub const MoveFlags = enum(u4) {
+    QUIET = 0b0000, // 0
+    DOUBLE_PUSH = 0b0001, // 1
+    OO = 0b0010, // 2 can castle to the king side
+    OOO = 0b0011, // 3 can castle to the queen side
+    CAPTURE = 0b1000, // 8
+    CAPTURES = 0b1011, // 11
+    EN_PASSANT = 0b1010, // 10
+    
+    // Promotions (no capture)
+    PR_KNIGHT = 0b0100, // 4
+    PR_BISHOP = 0b0101, // 5
+    PR_ROOK =   0b0110, // 6
+    PR_QUEEN =  0b0111, // 7
+    PC_KNIGHT = 0b1100, // 12
+    PC_BISHOP = 0b1101, // 13
+    PC_ROOK =   0b1110, // 14
+    PC_QUEEN =  0b1111, // 15
+};
+
+pub const Castle = enum(u8) {
+    WK = 1,
+    WQ = 2,
+    BK = 4,
+    BQ = 8,
+};
+
+pub const Board = struct {
+    /// Number of Piece variants (including NO_PIECE)
+    pub const PieceCount = @intFromEnum(Piece.NO_PIECE) + 1;
+
+    /// One bitboard for each piece type (index matches unicodePice)
+    pieces: [PieceCount]Bitboard,
+    side: Color,
+    enpassant: square,
+    castle: u8, // bitmask of Castle.*
+    /// Combine all piece bitboards into one
+    pub fn pieces_combined(self: *const Board) Bitboard {
+        var bb: Bitboard = 0;
+        for (self.pieces) |p| bb |= p;
+        return bb;
+    }
+};
+
 
 // Attacking directions for the pieces
 pub const Direction = enum(i32) {

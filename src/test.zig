@@ -7,6 +7,69 @@ const util = @import("util.zig");
 const print = std.debug.print;
 const expect = std.testing.expect;
 
+test "test print bitboard" {
+    bitboard.print_board(0x382838);
+    bitboard.print_board(0x30203);
+    bitboard.print_board(0x40C0000000000000);
+}
+
+test "test print bitboard unicode" {
+    // 1) zero out everything
+    var b: types.Board = .{
+        .pieces = [_]types.Bitboard{0} ** types.Board.PieceCount,
+        .side = types.Color.Black, // Black to move after White’s setup?
+        .enpassant = types.square.e3, // example en passant square
+        .castle = @intFromEnum(types.Castle.WK) | @intFromEnum(types.Castle.WQ) | @intFromEnum(types.Castle.BK) | @intFromEnum(types.Castle.BQ),
+    };
+
+    // pawns
+    b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)], types.square.a2);
+    b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)], types.square.b2);
+    b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)], types.square.c2);
+    b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)], types.square.d2);
+    b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)], types.square.e2);
+    b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)], types.square.f2);
+    b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)], types.square.g2);
+    b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)], types.square.h2);
+    // knights
+    b.pieces[@intFromEnum(types.Piece.WHITE_KNIGHT)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_KNIGHT)], types.square.b1);
+    b.pieces[@intFromEnum(types.Piece.WHITE_KNIGHT)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_KNIGHT)], types.square.g1);
+    // bishops
+    b.pieces[@intFromEnum(types.Piece.WHITE_BISHOP)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_BISHOP)], types.square.c1);
+    b.pieces[@intFromEnum(types.Piece.WHITE_BISHOP)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_BISHOP)], types.square.f1);
+    // rooks
+    b.pieces[@intFromEnum(types.Piece.WHITE_ROOK)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_ROOK)], types.square.a1);
+    b.pieces[@intFromEnum(types.Piece.WHITE_ROOK)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_ROOK)], types.square.h1);
+    // queen  king
+    b.pieces[@intFromEnum(types.Piece.WHITE_QUEEN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_QUEEN)], types.square.d1);
+    b.pieces[@intFromEnum(types.Piece.WHITE_KING)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_KING)], types.square.e1);
+
+    // 3) set Black pieces
+    // pawns
+    b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)], types.square.a7);
+    b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)], types.square.b7);
+    b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)], types.square.c7);
+    b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)], types.square.d7);
+    b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)], types.square.e7);
+    b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)], types.square.f7);
+    b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)], types.square.g7);
+    b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)], types.square.h7);
+    // knights
+    b.pieces[@intFromEnum(types.Piece.BLACK_KNIGHT)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_KNIGHT)], types.square.b8);
+    b.pieces[@intFromEnum(types.Piece.BLACK_KNIGHT)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_KNIGHT)], types.square.g8);
+    // bishops
+    b.pieces[@intFromEnum(types.Piece.BLACK_BISHOP)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_BISHOP)], types.square.c8);
+    b.pieces[@intFromEnum(types.Piece.BLACK_BISHOP)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_BISHOP)], types.square.f8);
+    // rooks
+    b.pieces[@intFromEnum(types.Piece.BLACK_ROOK)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_ROOK)], types.square.a8);
+    b.pieces[@intFromEnum(types.Piece.BLACK_ROOK)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_ROOK)], types.square.h8);
+    // queen  king
+    b.pieces[@intFromEnum(types.Piece.BLACK_QUEEN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_QUEEN)], types.square.d8);
+    b.pieces[@intFromEnum(types.Piece.BLACK_KING)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_KING)], types.square.e8);
+
+    bitboard.print_unicode_board(b);
+}
+
 test "white pawn attacks" {
     print("White pawn attacks from e2 : 0x280000\n", .{});
     try expect(attacks.pawn_attacks_from_bitboard(types.Color.White, util.set_bit(types.empty_Bitboard, types.square.e2)) == 0x280000);

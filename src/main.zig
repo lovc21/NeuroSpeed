@@ -7,5 +7,5 @@ const attacks = @import("attacks.zig");
 const stdout = std.io.getStdOut().writer();
 
 pub fn main() !void {
-    attacks.init_bishop_attackes();
+    attacks.init_attacks();
 }
