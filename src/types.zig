@@ -1,3 +1,5 @@
+const std = @import("std");
+
 // Bitboard type
 pub const Bitboard = u64;
 
@@ -32,6 +34,15 @@ pub const square_number = [_]usize{
     48, 49, 50, 51, 52, 53, 54, 55,
     56, 57, 58, 59, 60, 61, 62, 63,
 };
+
+pub const SquareToString = [_][:0]const u8{ "a1", "b1", "c1", "d1", "e1", "f1", "g1", "h1", "a2", "b2", "c2", "d2", "e2", "f2", "g2", "h2", "a3", "b3", "c3", "d3", "e3", "f3", "g3", "h3", "a4", "b4", "c4", "d4", "e4", "f4", "g4", "h4", "a5", "b5", "c5", "d5", "e5", "f5", "g5", "h5", "a6", "b6", "c6", "d6", "e6", "f6", "g6", "h6", "a7", "b7", "c7", "d7", "e7", "f7", "g7", "h7", "a8", "b8", "c8", "d8", "e8", "f8", "g8", "h8", "None" };
+
+// FEN positions
+pub const empty_board: []const u8 = "8/8/8/8/8/8/8/8 w - - ";
+pub const start_position: []const u8 = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+pub const tricky_position: []const u8 = "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1";
+pub const killer_position: []const u8 = "rnbqkb1r/pp1p1pPp/8/2p1pP2/1P1P4/3P3P/P1P1P3/RNBQKBNR w KQkq e6 0 1";
+pub const cmk_position: []const u8 = "r2q1rk1/ppp2ppp/2n1bn2/2b1p3/3pP3/3P1NPP/PPP1NPB1/R1BQ1RK1 b - - 0 9 ";
 
 pub const PieceString = "PNBRQK~>pnbrqk.";
 
@@ -101,19 +112,28 @@ pub const Castle = enum(u8) {
 };
 
 pub const Board = struct {
-    /// Number of Piece variants (including NO_PIECE)
     pub const PieceCount = @intFromEnum(Piece.NO_PIECE) + 1;
 
-    /// One bitboard for each piece type (index matches unicodePice)
     pieces: [PieceCount]Bitboard,
     side: Color,
     enpassant: square,
     castle: u8, // bitmask of Castle.*
-    /// Combine all piece bitboards into one
+                
     pub fn pieces_combined(self: *const Board) Bitboard {
         var bb: Bitboard = 0;
         for (self.pieces) |p| bb |= p;
         return bb;
+    }
+
+    pub fn new() Board {
+        var b: Board = undefined;
+
+        @memset(b.pieces[0..],0);
+
+        b.side = Color.White;
+        b.enpassant = square.NO_SQUARE;
+        b.castle = 0;
+        return b; 
     }
 };
 

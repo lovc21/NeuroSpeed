@@ -8,4 +8,8 @@ const stdout = std.io.getStdOut().writer();
 
 pub fn main() !void {
     attacks.init_attacks();
+
+    var b = types.Board.new();
+    try bitboard.fan_pars(types.tricky_position, &b);
+    bitboard.print_unicode_board(b);
 }
