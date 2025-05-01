@@ -133,7 +133,7 @@ pub fn fan_pars(fen: []const u8, board: *types.Board) !void {
         const f: usize = @intCast(ep[0] - 'a');
         const r: usize = @intCast(ep[1] - '1');
         if (f > 7 or r > 7) return FenError.InvalidFormat;
-        const idx = (7 - r) * 8 + f;
+        const idx = r * 8 + f;
         board.enpassant = @enumFromInt(idx);
     } else {
         return FenError.InvalidFormat;
