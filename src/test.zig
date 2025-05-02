@@ -16,11 +16,12 @@ test "test print bitboard" {
 test "test print bitboard unicode" {
     var b: types.Board = .{
         .pieces = [_]types.Bitboard{0} ** types.Board.PieceCount,
-        .side = types.Color.Black, // Black to move after White’s setup?
-        .enpassant = types.square.e3, // example en passant square
+        .side = types.Color.Black,
+        .enpassant = types.square.e3,
         .castle = @intFromEnum(types.Castle.WK) | @intFromEnum(types.Castle.WQ) | @intFromEnum(types.Castle.BK) | @intFromEnum(types.Castle.BQ),
     };
 
+    // White pieces
     // pawns
     b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)], types.square.a2);
     b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)], types.square.b2);
@@ -43,7 +44,7 @@ test "test print bitboard unicode" {
     b.pieces[@intFromEnum(types.Piece.WHITE_QUEEN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_QUEEN)], types.square.d1);
     b.pieces[@intFromEnum(types.Piece.WHITE_KING)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_KING)], types.square.e1);
 
-    // 3) set Black pieces
+    // Black pieces
     // pawns
     b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)], types.square.a7);
     b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)], types.square.b7);

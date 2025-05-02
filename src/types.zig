@@ -22,6 +22,14 @@ pub const square = enum {
     a8, b8, c8, d8, e8, f8, g8, h8,
     NO_SQUARE,
     // zig fmt: on
+    //
+    pub fn index(self: square) usize {
+        return @intFromEnum(self);
+    }
+
+    pub inline fn toU6(self: square) u6 {
+        return @as(u6, @truncate(@intFromEnum(self)));
+    }
 };
 
 pub const square_number = [_]usize{

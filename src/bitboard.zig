@@ -56,7 +56,12 @@ pub fn print_unicode_board(board: types.Board) void {
     print(" Bitboard: 0b{b}\n\n", .{board.pieces_combined()});
 }
 
-pub const FenError = error{InvalidFormat};
+pub const FenError = error{
+    InvalidFormat,
+    InvalidPosition,
+    InvalidCastlingRights,
+    InvalidEnPassant,
+};
 
 pub fn fan_pars(fen: []const u8, board: *types.Board) !void {
     var it = std.mem.tokenizeAny(u8, fen, " ");
@@ -84,7 +89,6 @@ pub fn fan_pars(fen: []const u8, board: *types.Board) !void {
             file += @intCast(c - '0');
             continue;
         }
-        // Map character → Piece enum
         const pe = switch (c) {
             'P' => types.Piece.WHITE_PAWN,
             'N' => types.Piece.WHITE_KNIGHT,
@@ -100,14 +104,14 @@ pub fn fan_pars(fen: []const u8, board: *types.Board) !void {
             'k' => types.Piece.BLACK_KING,
             else => return FenError.InvalidFormat,
         };
-        if (rank >= 8 or file >= 8) return FenError.InvalidFormat;
+        if (rank >= 8 or file >= 8) return FenError.InvalidPosition;
         const sq_idx = rank * 8 + file;
         const piece_index: usize = @intCast(@intFromEnum(pe));
         board.pieces[piece_index] |= (@as(u64, 1) << @intCast(sq_idx));
         file += 1;
     }
 
-    if (rank != 7) return FenError.InvalidFormat;
+    if (rank != 7) return FenError.InvalidPosition;
 
     // Active color
     board.side = if (active[0] == 'w') types.Color.White else types.Color.Black;
@@ -121,21 +125,22 @@ pub fn fan_pars(fen: []const u8, board: *types.Board) !void {
                 'Q' => mask |= @intFromEnum(types.Castle.WQ),
                 'k' => mask |= @intFromEnum(types.Castle.BK),
                 'q' => mask |= @intFromEnum(types.Castle.BQ),
-                else => return FenError.InvalidFormat,
+                else => return FenError.InvalidCastlingRights,
             }
         }
     }
     board.castle = mask;
 
+    // set enpassant
     if (std.mem.eql(u8, ep, "-")) {
         board.enpassant = types.square.NO_SQUARE;
     } else if (ep.len == 2) {
         const f: usize = @intCast(ep[0] - 'a');
         const r: usize = @intCast(ep[1] - '1');
-        if (f > 7 or r > 7) return FenError.InvalidFormat;
+        if (f > 7 or r > 7) return FenError.InvalidEnPassant;
         const idx = r * 8 + f;
         board.enpassant = @enumFromInt(idx);
     } else {
-        return FenError.InvalidFormat;
+        return FenError.InvalidEnPassant;
     }
 }
