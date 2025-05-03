@@ -1,6 +1,7 @@
 const std = @import("std");
 const util = @import("util.zig");
 const types = @import("types.zig");
+const attacks = @import("attacks.zig");
 const print = std.debug.print;
 
 pub fn print_board(bitboard: types.Bitboard) void {
@@ -54,6 +55,54 @@ pub fn print_unicode_board(board: types.Board) void {
     // print(" Castling:   {s}\n", .{cast_str})
     print(" Bitboard: 0x{0x}\n", .{board.pieces_combined()});
     print(" Bitboard: 0b{b}\n\n", .{board.pieces_combined()});
+}
+// TODO fix bug on the whitte side
+//  8  .  .  .  .  .  .  .  .
+// 7  .  .  .  .  .  .  .  X
+// 6  .  .  .  .  .  .  X  .
+// 5  .  .  .  .  .  X  .  .
+// 4  .  .  .  .  .  .  .  .
+// 3  X  X  X  X  X  X  X  X
+// 2  X  X  X  X  X  X  X  X
+// 1  .  X  X  X  X  X  X  .
+pub fn print_attacked_squares(board: *types.Board) void {
+    const occ = board.pieces_combined();
+    const bbs = board.pieces;
+    const side = board.side;
+
+    print("\n", .{});
+
+    for (0..8) |rank| {
+        print("  {} ", .{8 - rank});
+        for (0..8) |file| {
+            const square: u6 = @intCast(rank * 8 + file);
+            const sq_bb = types.squar_bb[square];
+
+            const attacked = switch (side) {
+                .White => (attacks.pawn_attacks_from_bitboard(.White, sq_bb) & bbs[@intFromEnum(types.Piece.WHITE_PAWN)]) != 0 or
+                    (attacks.knight_attacks_from_bitboard(sq_bb) & bbs[@intFromEnum(types.Piece.WHITE_KNIGHT)]) != 0 or
+                    (attacks.get_bishop_attacks(square, occ) & bbs[@intFromEnum(types.Piece.WHITE_BISHOP)]) != 0 or
+                    (attacks.get_rook_attacks(square, occ) & bbs[@intFromEnum(types.Piece.WHITE_ROOK)]) != 0 or
+                    (attacks.get_queen_attacks(square, occ) & bbs[@intFromEnum(types.Piece.WHITE_QUEEN)]) != 0 or
+                    (attacks.king_attacks_from_bitboard(sq_bb) & bbs[@intFromEnum(types.Piece.WHITE_KING)]) != 0,
+
+                .Black => (attacks.pawn_attacks_from_bitboard(.Black, sq_bb) & bbs[@intFromEnum(types.Piece.BLACK_PAWN)]) != 0 or
+                    (attacks.knight_attacks_from_bitboard(sq_bb) & bbs[@intFromEnum(types.Piece.BLACK_KNIGHT)]) != 0 or
+                    (attacks.get_bishop_attacks(square, occ) & bbs[@intFromEnum(types.Piece.BLACK_BISHOP)]) != 0 or
+                    (attacks.get_rook_attacks(square, occ) & bbs[@intFromEnum(types.Piece.BLACK_ROOK)]) != 0 or
+                    (attacks.get_queen_attacks(square, occ) & bbs[@intFromEnum(types.Piece.BLACK_QUEEN)]) != 0 or
+                    (attacks.king_attacks_from_bitboard(sq_bb) & bbs[@intFromEnum(types.Piece.BLACK_KING)]) != 0,
+
+                else => unreachable,
+            };
+
+            const ch: u8 = if (attacked) 'X' else '.';
+            print(" {c} ", .{ch});
+        }
+        print("\n", .{});
+    }
+
+    print("\n   a  b  c  d  e  f  g  h\n", .{});
 }
 
 pub const FenError = error{

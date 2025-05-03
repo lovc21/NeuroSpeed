@@ -218,17 +218,20 @@ test "bishop attacks with one blocker" {
     try std.testing.expectEqual(@as(types.Bitboard, expected), table_attacks);
 }
 
-test "test the get attacks bishop/rook" {
+test "test the get attacks bishop/rook/queen" {
     var occ: types.Bitboard = 0;
 
     occ = 0;
     print("\nOCC = 0x{x} (empty)\n", .{occ});
     const bishopEmpty = attacks.get_bishop_attacks(types.square.toU6(types.square.d4), occ);
     const rookEmpty = attacks.get_rook_attacks(types.square.toU6(types.square.d4), occ);
+    const queenEmpty = attacks.get_queen_attacks(types.square.toU6(types.square.d4), occ);
     print(" bishop(d4) → 0x{x}\n", .{bishopEmpty});
     print("  rook(d4) → 0x{x}\n", .{rookEmpty});
+    print("  queen(d4) → 0x{x}\n", .{queenEmpty});
     try std.testing.expectEqual(0x8041221400142241, bishopEmpty);
     try std.testing.expectEqual(0x8080808f7080808, rookEmpty);
+    try std.testing.expectEqual(0x88492a1cf71c2a49, queenEmpty);
 
     occ = ((1 << @intFromEnum(types.square.e7)) | (1 << @intFromEnum(types.square.f6)));
     print("\nOCC = 0x{x} (blockers on b4,f6)\n", .{occ});
@@ -241,6 +244,12 @@ test "test the get attacks bishop/rook" {
     const rookBlocked = attacks.get_rook_attacks(types.square.toU6(types.square.d4), occ);
     print("  rook(d4) → 0x{x}\n", .{rookBlocked});
     try std.testing.expectEqual(0x808f6080808, rookBlocked);
+
+    occ = ((1 << @intFromEnum(types.square.b4)) | (1 << @intFromEnum(types.square.d6)) | (1 << @intFromEnum(types.square.e7)) | (1 << @intFromEnum(types.square.f6)));
+    print("\nOCC = 0x{x} (blockers on b4,d6)\n", .{occ});
+    const queenBlocked = attacks.get_queen_attacks(types.square.toU6(types.square.d4), occ);
+    print("  queen(d4) → 0x{x}\n", .{queenBlocked});
+    try std.testing.expectEqual(0x12a1cf61c2a49, queenBlocked);
 }
 
 test "test fen parsing" {

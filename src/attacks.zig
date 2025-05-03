@@ -228,6 +228,24 @@ pub inline fn get_bishop_attacks(square: u6, occ: u64) u64 {
     return Bishop_attacks[square][idx];
 }
 
+pub inline fn get_queen_attacks(square: u6, occ: u64) u64 {
+    const queen_attacks: u64 = get_bishop_attacks(square, occ) | get_rook_attacks(square, occ);
+    return queen_attacks;
+}
+
+pub fn piece_attacks(square: u6, occ: u64, comptime Piece: types.PieceType) void {
+    if (Piece != types.PieceType.Pawn) {
+        return switch (Piece) {
+            types.PieceType.Bishop => get_bishop_attacks(square, occ),
+            types.PieceType.Rook => get_rook_attacks(square, occ),
+            types.PieceType.Queen => get_queen_attacks(square, occ),
+            else => print("pseudo legal attacks", .{}),
+        };
+    } else {
+        @panic("don't pass pawns");
+    }
+}
+
 pub fn init_attacks() void {
     init_bishop_attackes();
     init_rook_attackes();
