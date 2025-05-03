@@ -170,14 +170,14 @@ pub inline fn init_rook_attackes() void {
         }
     }
 }
-// TODO Fix
+
 pub inline fn getRookAttacks(square: u6, occ: u64) u64 {
     const mask: u64 = tabele.Rook_attackes_tabele[square];
     const magic: u64 = tabele.rook_magics[square];
-    const shift: u6 = @intCast(tabele.Rook_index_bit[square]);
+    const shift: u6 = @intCast(64 - tabele.Rook_index_bit[square]);
     const relevant: u64 = occ & mask;
     const idx: usize = @intCast((relevant *% magic) >> shift);
-    return Rook_attacks[square][idx];
+    return Rook_attacks[square][idx] - 64;
 }
 
 pub inline fn get_bishop_attacks_for_init(square: u8, occ: u64) u64 {
@@ -217,11 +217,11 @@ pub inline fn init_bishop_attackes() void {
         }
     }
 }
-// TODO Fix this
+
 pub inline fn getBishopAttacks(square: u6, occ: u64) u64 {
     const mask: u64 = tabele.Bishops_attackes_tabele[square];
     const magic: u64 = tabele.bishop_magics[square];
-    const shift: u6 = @intCast(tabele.Bishop_index_bit[square]);
+    const shift: u6 = @intCast(64 - tabele.Bishop_index_bit[square]);
     const relevant: u64 = occ & mask;
     const raw_idx: u64 = (relevant *% magic) >> shift;
     const idx: usize = @intCast(raw_idx);
