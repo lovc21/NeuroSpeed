@@ -218,6 +218,31 @@ test "bishop attacks with one blocker" {
     try std.testing.expectEqual(@as(types.Bitboard, expected), table_attacks);
 }
 
+test "test the get attacks bishop/rook" {
+    var occ: types.Bitboard = 0;
+
+    occ = 0;
+    print("\nOCC = 0x{x} (empty)\n", .{occ});
+    const bishopEmpty = attacks.get_bishop_attacks(types.square.toU6(types.square.d4), occ);
+    const rookEmpty = attacks.get_rook_attacks(types.square.toU6(types.square.d4), occ);
+    print(" bishop(d4) → 0x{x}\n", .{bishopEmpty});
+    print("  rook(d4) → 0x{x}\n", .{rookEmpty});
+    try std.testing.expectEqual(0x8041221400142241, bishopEmpty);
+    try std.testing.expectEqual(0x8080808f7080808, rookEmpty);
+
+    occ = ((1 << @intFromEnum(types.square.e7)) | (1 << @intFromEnum(types.square.f6)));
+    print("\nOCC = 0x{x} (blockers on b4,f6)\n", .{occ});
+    const bishopBlocked = attacks.get_bishop_attacks(types.square.toU6(types.square.b4), occ);
+    print(" bishop(d4) → 0x{x}\n", .{bishopBlocked});
+    try std.testing.expectEqual(0x10080500050810, bishopBlocked);
+
+    occ = ((1 << @intFromEnum(types.square.b4)) | (1 << @intFromEnum(types.square.d6)));
+    print("\nOCC = 0x{x} (blockers on b4,d6)\n", .{occ});
+    const rookBlocked = attacks.get_rook_attacks(types.square.toU6(types.square.d4), occ);
+    print("  rook(d4) → 0x{x}\n", .{rookBlocked});
+    try std.testing.expectEqual(0x808f6080808, rookBlocked);
+}
+
 test "test fen parsing" {
     const TestExpect = struct {
         occupancy: u64,
@@ -316,7 +341,7 @@ test "test fen parsing" {
 
         var b = types.Board.new();
         try bitboard.fan_pars(fen, &b);
-        print("=== Testing FEN: {s}\n", .{fen});
+        print("\n=== Testing FEN: {s}\n", .{fen});
         print("  occupancy: expected=0x{x}, actual=0x{x}\n", .{ expected.occupancy, b.pieces_combined() });
         print("  en-passant: expected={s}, actual={s}\n", .{ expected.ep_str, if (b.enpassant == types.square.NO_SQUARE) "-" else types.SquareString.getSquareToString(b.enpassant) });
         print("  castling   : expected=0b{b:0>4}, actual=0b{b:0>4}\n\n", .{ expected.castle, b.castle });
