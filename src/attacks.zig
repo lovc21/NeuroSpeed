@@ -36,6 +36,45 @@ pub inline fn pawn_attacks_from_bitboard(comptime color: types.Color, bb: types.
         ((bb & ~(@intFromEnum(types.MaskFile.AFILE))) >> 9) | ((bb & ~(@intFromEnum(types.MaskFile.HFILE))) >> 7);
 }
 
+pub var pawn_attacks: [2][64]u64 = undefined;
+pub var pseudo_legal_attacks: [6][64]u64 = undefined;
+
+pub fn initialise_pseudo_legal() void {
+    // copy pawn-attack tables directly
+    pawn_attacks[0] = tabele.White_pawn_attacks_tabele;
+    pawn_attacks[1] = tabele.Black_pawn_attacks_tabele;
+
+    // copy fixed knight & king tables
+    const knight_i = @intFromEnum(types.PieceType.Knight);
+    const king_i = @intFromEnum(types.PieceType.King);
+    pseudo_legal_attacks[knight_i] = tabele.Knight_attackes_tabele;
+    pseudo_legal_attacks[king_i] = tabele.King_attackes_tabele;
+
+    // build rook, bishop, queen on empty board
+    const rook_i = @intFromEnum(types.PieceType.Rook);
+    const bishop_i = @intFromEnum(types.PieceType.Bishop);
+    const queen_i = @intFromEnum(types.PieceType.Queen);
+
+    // single pass over all 64 squares
+    for (types.square_number) |s| {
+        const sq: u8 = @intCast(s);
+        const occ = 0; // empty occupancy
+
+        // sliding attacks
+        const r_att = get_rook_attacks_for_init(sq, occ);
+        const b_att = get_bishop_attacks_for_init(sq, occ);
+
+        pseudo_legal_attacks[rook_i][s] = r_att;
+        pseudo_legal_attacks[bishop_i][s] = b_att;
+        pseudo_legal_attacks[queen_i][s] = r_att | b_att;
+    }
+}
+
+/// Returns the pawn-attack mask for square `s` (0..63) and color `c`
+pub inline fn pawn_attacks_from_square(s: usize, c: types.Color) u64 {
+    return pawn_attacks[@intFromEnum(c)][s];
+}
+
 // generate attacks for slidng pieces (bishop,rook)
 pub fn rook_attack_mask_from_bitboard(bb: types.Bitboard) types.Bitboard {
     var attacks: u64 = 0;
@@ -249,4 +288,5 @@ pub fn piece_attacks(square: u6, occ: u64, comptime Piece: types.PieceType) void
 pub fn init_attacks() void {
     init_bishop_attackes();
     init_rook_attackes();
+    initialise_pseudo_legal();
 }
