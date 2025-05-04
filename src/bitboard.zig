@@ -77,7 +77,6 @@ pub fn print_attacked_squares(board: *types.Board) void {
         for (0..8) |file| {
             const square: u6 = @intCast(rank * 8 + file);
             const sq_bb = types.squar_bb[square];
-
             const attacked = switch (side) {
                 .White => (attacks.pawn_attacks_from_bitboard(.White, sq_bb) & bbs[@intFromEnum(types.Piece.WHITE_PAWN)]) != 0 or
                     (attacks.knight_attacks_from_bitboard(sq_bb) & bbs[@intFromEnum(types.Piece.WHITE_KNIGHT)]) != 0 or
@@ -95,7 +94,6 @@ pub fn print_attacked_squares(board: *types.Board) void {
 
                 else => unreachable,
             };
-
             const ch: u8 = if (attacked) 'X' else '.';
             print(" {c} ", .{ch});
         }

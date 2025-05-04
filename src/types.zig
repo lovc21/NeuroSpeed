@@ -90,6 +90,10 @@ pub const Piece = enum(u8) {
     BLACK_QUEEN,
     BLACK_KING,
     NO_PIECE,
+
+    pub inline fn toU4(self: Piece) u4 {
+        return @as(u4, @intFromEnum(self));
+    }
 };
 
 pub const unicodePice = &[_][]const u8{
@@ -149,6 +153,20 @@ pub const Board = struct {
         b.enpassant = square.NO_SQUARE;
         b.castle = 0;
         return b; 
+    }
+
+    pub inline fn set_pieces(self: *Board, comptime c: Color) Bitboard{
+        return if (c == Color.White) self.pieces[Piece.WHITE_PAWN.toU4()] * 8 | self.pieces[Piece.WHITE_KNIGHT.toU4()] | self.pieces[Piece.WHITE_BISHOP.toU4()] | self.pieces[Piece.WHITE_QUEEN.toU4()] | self.pieces[Piece.WHITE_KING.toU4()] else
+        self.pieces[Piece.BLACK_PAWN.toU4()] * 8 | self.pieces[Piece.BLACK_KNIGHT.toU4()] | self.pieces[Piece.BLACK_BISHOP.toU4()] | self.pieces[Piece.BLACK_QUEEN.toU4()] | self.pieces[Piece.BLACK_KING.toU4()];
+
+    }
+
+    pub inline fn set_white(self: *Board) Bitboard {
+        return  self.pieces[Piece.WHITE_PAWN.toU4()] * 8 | self.pieces[Piece.WHITE_KNIGHT.toU4()] | self.pieces[Piece.WHITE_BISHOP.toU4()] | self.pieces[Piece.WHITE_QUEEN.toU4()] | self.pieces[Piece.WHITE_KING.toU4()]; 
+    }
+
+    pub inline fn set_black(self: *Board) Bitboard {
+        return  self.pieces[Piece.BLACK_PAWN.toU4()] * 8 | self.pieces[Piece.BLACK_KNIGHT.toU4()] | self.pieces[Piece.BLACK_BISHOP.toU4()] | self.pieces[Piece.BLACK_QUEEN.toU4()] | self.pieces[Piece.BLACK_KING.toU4()];
     }
 };
 

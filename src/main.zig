@@ -10,15 +10,14 @@ pub fn main() !void {
     attacks.init_attacks();
 
     var b = types.Board.new();
-    try bitboard.fan_pars(types.tricky_position, &b);
+    //try bitboard.fan_pars(types.start_position, &b);
 
-    const bb = b.pieces_combined();
-    print("Occupancy (hex): 0x{x}\n", .{bb});
+    //const bb = b.pieces_combined();
+    //print("Occupancy (hex): 0x{x}\n", .{bb});
 
-    b.side = types.Color.Black;
-
+    const mybb = b.set_pieces(types.Color.White);
+    bitboard.print_board(mybb);
     bitboard.print_unicode_board(b);
-    //bitboard.print_attacked_squares(&b);
     b.side = types.Color.White;
 
     bitboard.print_attacked_squares(&b);
