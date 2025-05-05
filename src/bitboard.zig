@@ -2,6 +2,7 @@ const std = @import("std");
 const util = @import("util.zig");
 const types = @import("types.zig");
 const attacks = @import("attacks.zig");
+const tables = @import("tabeles.zig");
 const print = std.debug.print;
 
 pub fn print_board(bitboard: types.Bitboard) void {
@@ -56,8 +57,9 @@ pub fn print_unicode_board(board: types.Board) void {
     print(" Bitboard: 0x{0x}\n", .{board.pieces_combined()});
     print(" Bitboard: 0b{b}\n\n", .{board.pieces_combined()});
 }
+
 // TODO fix bug on the whitte side
-//  8  .  .  .  .  .  .  .  .
+//  7  .  .  .  .  .  .  .  .
 // 7  .  .  .  .  .  .  .  X
 // 6  .  .  .  .  .  .  X  .
 // 5  .  .  .  .  .  X  .  .
@@ -65,7 +67,7 @@ pub fn print_unicode_board(board: types.Board) void {
 // 3  X  X  X  X  X  X  X  X
 // 2  X  X  X  X  X  X  X  X
 // 1  .  X  X  X  X  X  X  .
-pub fn print_attacked_squares(board: *types.Board) void {
+pub fn print_attacked_squares(board: types.Board) void {
     const occ = board.pieces_combined();
     const bbs = board.pieces;
     const side = board.side;
@@ -76,21 +78,20 @@ pub fn print_attacked_squares(board: *types.Board) void {
         print("  {} ", .{8 - rank});
         for (0..8) |file| {
             const square: u6 = @intCast(rank * 8 + file);
-            const sq_bb = types.squar_bb[square];
             const attacked = switch (side) {
-                .White => (attacks.pawn_attacks_from_bitboard(.White, sq_bb) & bbs[@intFromEnum(types.Piece.WHITE_PAWN)]) != 0 or
-                    (attacks.knight_attacks_from_bitboard(sq_bb) & bbs[@intFromEnum(types.Piece.WHITE_KNIGHT)]) != 0 or
-                    (attacks.get_bishop_attacks(square, occ) & bbs[@intFromEnum(types.Piece.WHITE_BISHOP)]) != 0 or
-                    (attacks.get_rook_attacks(square, occ) & bbs[@intFromEnum(types.Piece.WHITE_ROOK)]) != 0 or
+                .White => (attacks.pawn_attacks_from_square(square, .Black) & bbs[@intFromEnum(types.Piece.WHITE_PAWN)]) != 0 or
+                    (attacks.piece_attacks(square, occ, types.PieceType.Knight) & bbs[@intFromEnum(types.Piece.WHITE_KNIGHT)]) != 0 or
+                    (attacks.piece_attacks(square, occ, types.PieceType.Bishop) & bbs[@intFromEnum(types.Piece.WHITE_BISHOP)]) != 0 or
+                    (attacks.piece_attacks(square, occ, types.PieceType.Rook) & bbs[@intFromEnum(types.Piece.WHITE_ROOK)]) != 0 or
                     (attacks.get_queen_attacks(square, occ) & bbs[@intFromEnum(types.Piece.WHITE_QUEEN)]) != 0 or
-                    (attacks.king_attacks_from_bitboard(sq_bb) & bbs[@intFromEnum(types.Piece.WHITE_KING)]) != 0,
+                    (attacks.piece_attacks(square, occ, types.PieceType.King) & bbs[@intFromEnum(types.Piece.WHITE_KING)]) != 0,
 
-                .Black => (attacks.pawn_attacks_from_bitboard(.Black, sq_bb) & bbs[@intFromEnum(types.Piece.BLACK_PAWN)]) != 0 or
-                    (attacks.knight_attacks_from_bitboard(sq_bb) & bbs[@intFromEnum(types.Piece.BLACK_KNIGHT)]) != 0 or
-                    (attacks.get_bishop_attacks(square, occ) & bbs[@intFromEnum(types.Piece.BLACK_BISHOP)]) != 0 or
-                    (attacks.get_rook_attacks(square, occ) & bbs[@intFromEnum(types.Piece.BLACK_ROOK)]) != 0 or
+                .Black => (attacks.pawn_attacks_from_square(square, .White) & bbs[@intFromEnum(types.Piece.BLACK_PAWN)]) != 0 or
+                    (attacks.piece_attacks(square, occ, types.PieceType.Knight) & bbs[@intFromEnum(types.Piece.BLACK_KNIGHT)]) != 0 or
+                    (attacks.piece_attacks(square, occ, types.PieceType.Bishop) & bbs[@intFromEnum(types.Piece.BLACK_BISHOP)]) != 0 or
+                    (attacks.piece_attacks(square, occ, types.PieceType.Rook) & bbs[@intFromEnum(types.Piece.BLACK_ROOK)]) != 0 or
                     (attacks.get_queen_attacks(square, occ) & bbs[@intFromEnum(types.Piece.BLACK_QUEEN)]) != 0 or
-                    (attacks.king_attacks_from_bitboard(sq_bb) & bbs[@intFromEnum(types.Piece.BLACK_KING)]) != 0,
+                    (attacks.piece_attacks(square, occ, types.PieceType.King) & bbs[@intFromEnum(types.Piece.BLACK_KING)]) != 0,
 
                 else => unreachable,
             };
@@ -101,6 +102,71 @@ pub fn print_attacked_squares(board: *types.Board) void {
     }
 
     print("\n   a  b  c  d  e  f  g  h\n", .{});
+}
+
+pub fn is_square_attacked(
+    square: u6,
+    by: types.Color,
+    board: types.Board,
+) bool {
+    const occAll = board.pieces_combined();
+
+    // Bishop/Queen attackers (diagonals)
+    const bishopMask = attacks.get_bishop_attacks(square, occAll);
+    const bishopAttackers = bishopMask & (board.pieces[
+        if (by == .White)
+            types.Piece.WHITE_BISHOP.toU4()
+        else
+            types.Piece.BLACK_BISHOP.toU4()
+    ] | board.pieces[
+        if (by == .White)
+            types.Piece.WHITE_QUEEN.toU4()
+        else
+            types.Piece.BLACK_QUEEN.toU4()
+    ]);
+    std.debug.print("  bishopMask    : 0x{x}\n", .{bishopMask});
+    std.debug.print("  bishopAttackers: 0x{x}\n", .{bishopAttackers});
+
+    // Rook/Queen attackers (ranks & files)
+    const rookMask = attacks.get_rook_attacks(square, occAll);
+    const rookAttackers = rookMask & (board.pieces[
+        if (by == .White)
+            types.Piece.WHITE_ROOK.toU4()
+        else
+            types.Piece.BLACK_ROOK.toU4()
+    ] | board.pieces[
+        if (by == .White)
+            types.Piece.WHITE_QUEEN.toU4()
+        else
+            types.Piece.BLACK_QUEEN.toU4()
+    ]);
+    // std.debug.print("  rookMask      : 0x{x}\n", .{rookMask});
+    // std.debug.print("  rookAttackers : 0x{x}\n", .{rookAttackers});
+
+    // Combine all attackers
+    const attackers = bishopAttackers | rookAttackers;
+    std.debug.print("  combined attackers: 0x{x}\n", .{attackers});
+
+    return attackers != 0;
+}
+
+pub fn print_attacked_squares_new(board: types.Board) void {
+    const side = board.side;
+
+    std.debug.print("=== attacked squares for side: {} ===\n", .{side});
+    print("\n", .{});
+    for (0..8) |r| {
+        print("  {} ", .{8 - r});
+        for (0..8) |c| {
+            const sq: u6 = @intCast(r * 8 + c);
+            const attacked = is_square_attacked(sq, side, board);
+            const ch: u8 = if (attacked) 'X' else '.';
+            print(" {c} ", .{ch});
+        }
+        print("\n", .{});
+    }
+    print("\n   a  b  c  d  e  f  g  h\n\n", .{});
+    std.debug.print("=== end attacked squares ===\n", .{});
 }
 
 pub const FenError = error{
