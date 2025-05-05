@@ -74,6 +74,10 @@ pub const PieceType = enum(u8) {
     Rook,
     Queen,
     King,
+
+    pub inline fn toU3(self: PieceType) u3 {
+        return @intFromEnum(self);
+    }
 };
 
 pub const Piece = enum(u8) {
@@ -134,6 +138,7 @@ pub const Board = struct {
     pub const PieceCount = @intFromEnum(Piece.NO_PIECE) + 1;
 
     pieces: [PieceCount]Bitboard,
+    board: [64]Piece,
     side: Color,
     enpassant: square,
     castle: u8, // bitmask of Castle.*

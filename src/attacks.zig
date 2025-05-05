@@ -264,6 +264,7 @@ pub inline fn get_bishop_attacks(square: u6, occ: u64) u64 {
     const relevant: u64 = occ & mask;
     const raw_idx: u64 = (relevant *% magic) >> shift;
     const idx: usize = @intCast(raw_idx);
+    const idx: usize = @intCast((relevant *% magic) >> shift);
     return Bishop_attacks[square][idx];
 }
 

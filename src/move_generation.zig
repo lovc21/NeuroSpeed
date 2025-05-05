@@ -15,5 +15,9 @@ pub const Move = struct {
 };
 
 pub fn generate_moves(list: *lists.MoveList) void {
+    const us = types.Board.side; // side to move
+    const them = if (types.Board.side == .white) .black else .white;
+    _ = us;
+    _ = them;
     _ = list;
 }
