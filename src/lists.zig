@@ -1,5 +1,5 @@
 const std = @import("std");
-const Move = @import("move_generation.zig");
+const Move = @import("move_generation.zig").Move;
 
 pub const MoveList = struct {
     moves: [255]Move = undefined,
