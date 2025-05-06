@@ -125,6 +125,7 @@ pub fn is_square_attacked(
             types.Piece.BLACK_QUEEN.toU4()
     ]);
     std.debug.print("  bishopMask    : 0x{x}\n", .{bishopMask});
+    print_board(bishopMask);
     std.debug.print("  bishopAttackers: 0x{x}\n", .{bishopAttackers});
 
     // Rook/Queen attackers (ranks & files)

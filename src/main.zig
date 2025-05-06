@@ -14,7 +14,9 @@ pub fn main() !void {
 
     const bb = b.pieces_combined();
     print("Occupancy (hex): 0x{x}\n", .{bb});
-    b.side = types.Color.White;
+
+    bitboard.print_unicode_board(b);
+    b.side = types.Color.Black;
     bitboard.print_unicode_board(b);
     //bitboard.print_attacked_squares(&b);
     bitboard.print_attacked_squares_new(b);
