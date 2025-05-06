@@ -19,7 +19,7 @@ pub inline fn popcount(n: u64) u7 {
 }
 
 // get the last bit
-pub inline fn lsb_index(n: u64) u6 {
+pub inline fn lsb_index(n: u64) u7 {
     return @ctz(n);
 }
 
