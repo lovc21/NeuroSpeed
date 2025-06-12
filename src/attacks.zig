@@ -223,17 +223,7 @@ pub inline fn get_rook_attacks(square: u6, occ: u64) u64 {
 }
 
 pub inline fn get_bishop_attacks_for_init(square: u8, occ: u64) u64 {
-    const rank_i8: i8 = @intCast(square / 8);
-    const file_i8: i8 = @intCast(square % 8);
-    const diag_i: i8 = rank_i8 - file_i8 + 7;
-    const anti_i: i8 = rank_i8 + file_i8;
-    const diag_idx: usize = @intCast(diag_i);
-    const anti_idx: usize = @intCast(anti_i);
-    const mask1: u64 = types.mask_diagonal_nw_se[diag_idx];
-    const mask2: u64 = types.mask_anti_diagonal_ne_sw[anti_idx];
-    const att1 = sliding_attacks(square, occ, mask1);
-    const att2 = sliding_attacks(square, occ, mask2);
-    return att1 | att2;
+    return get_bishop_attacks_for_init(square, occ);
 }
 
 //  bishop magice Bitboards
@@ -244,16 +234,28 @@ pub inline fn init_bishop_attackes() void {
         const mask = tabele.Bishops_attackes_tabele[square];
         const relevantBits = tabele.Bishop_index_bit[square];
         const magic = tabele.bishop_magics[square];
-
         const shift: u6 = @truncate(64 - relevantBits);
         const sq6 = @as(u8, @intCast(square));
-        var subset: types.Bitboard = mask;
 
+        // Clear the table for this square first
+        const table_size = @as(usize, 1) << @intCast(relevantBits);
+        @memset(Bishop_attacks[square][0..table_size], 0);
+
+        var subset: types.Bitboard = mask;
         while (true) {
             var idx64: u64 = @as(u64, subset) *% magic;
             idx64 = idx64 >> shift;
             const idx: usize = @intCast(idx64);
-            Bishop_attacks[square][idx] = get_bishop_attacks_for_init(sq6, subset);
+
+            const correct_attacks = get_bishop_attacks_for_init(sq6, subset);
+
+            // Check for collision
+            if (Bishop_attacks[square][idx] != 0 and Bishop_attacks[square][idx] != correct_attacks) {
+                std.debug.panic("Magic collision detected for bishop square {} at index {}: existing=0x{x}, new=0x{x}\n", .{ square, idx, Bishop_attacks[square][idx], correct_attacks });
+            }
+
+            Bishop_attacks[square][idx] = correct_attacks;
+
             if (subset == 0) break;
             subset = (subset - 1) & mask;
         }

@@ -74,6 +74,10 @@ pub const PieceType = enum(u8) {
     Rook,
     Queen,
     King,
+
+    pub inline fn toU3(self: PieceType) u3 {
+        return @intFromEnum(self);
+    }
 };
 
 pub const Piece = enum(u8) {

@@ -67,7 +67,7 @@ pub fn print_unicode_board(board: types.Board) void {
 // 3  X  X  X  X  X  X  X  X
 // 2  X  X  X  X  X  X  X  X
 // 1  .  X  X  X  X  X  X  .
-pub fn print_attacked_squares(board: types.Board) void {
+pub fn print_attacked_squares(board: *types.Board) void {
     const occ = board.pieces_combined();
     const bbs = board.pieces;
     const side = board.side;
@@ -104,12 +104,43 @@ pub fn print_attacked_squares(board: types.Board) void {
     print("\n   a  b  c  d  e  f  g  h\n", .{});
 }
 
+pub fn debug_bishop_attack(square: u6, occ: u64) void {
+    const mask = tables.Bishops_attackes_tabele[square];
+    const magic = tables.bishop_magics[square];
+    const relevantBits = tables.Bishop_index_bit[square];
+    const shift: u6 = @intCast(64 - relevantBits);
+    const relevant = occ & mask;
+    const raw_idx = (relevant *% magic) >> shift;
+    const idx: usize = @intCast(raw_idx);
+    const result = attacks.Bishop_attacks[square][idx];
+
+    std.debug.print("=== BISHOP DEBUG for square {} ===\n", .{square});
+    std.debug.print("  occ=0x{x}\n", .{occ});
+    std.debug.print("  mask=0x{x}\n", .{mask});
+    std.debug.print("  relevant=0x{x}\n", .{relevant});
+    std.debug.print("  magic=0x{x}\n", .{magic});
+    std.debug.print("  shift={}\n", .{shift});
+    std.debug.print("  raw_idx={}\n", .{raw_idx});
+    std.debug.print("  idx={}\n", .{idx});
+    std.debug.print("  result=0x{x}\n", .{result});
+
+    // Compare with direct calculation
+    const direct = attacks.get_bishop_attacks_for_init(@intCast(square), occ);
+    std.debug.print("  direct=0x{x}\n", .{direct});
+    std.debug.print("  match: {}\n", .{result == direct});
+    std.debug.print("===============================\n\n", .{});
+}
+
 pub fn is_square_attacked(
     square: u6,
     by: types.Color,
     board: types.Board,
 ) bool {
     const occAll = board.pieces_combined();
+
+    if (square == 15 or square == 22 or square == 29 or square == 36) { // a8 for example, or pick any square showing wrong results
+        debug_bishop_attack(square, occAll);
+    }
 
     // Bishop/Queen attackers (diagonals)
     const bishopMask = attacks.get_bishop_attacks(square, occAll);
@@ -141,8 +172,8 @@ pub fn is_square_attacked(
         else
             types.Piece.BLACK_QUEEN.toU4()
     ]);
-    // std.debug.print("  rookMask      : 0x{x}\n", .{rookMask});
-    // std.debug.print("  rookAttackers : 0x{x}\n", .{rookAttackers});
+    std.debug.print("  rookMask      : 0x{x}\n", .{rookMask});
+    std.debug.print("  rookAttackers : 0x{x}\n", .{rookAttackers});
 
     // Combine all attackers
     const attackers = bishopAttackers | rookAttackers;

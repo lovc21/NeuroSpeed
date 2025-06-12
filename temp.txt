@@ -1,0 +1,1390 @@
+Occupancy (hex): 0xffff00000000ffff
+
+  8  ♖ ♘ ♗ ♕ ♔ ♗ ♘ ♖
+  7  ♙ ♙ ♙ ♙ ♙ ♙ ♙ ♙
+  6  . . . . . . . .
+  5  . . . . . . . .
+  4  . . . . . . . .
+  3  . . . . . . . .
+  2  ♟︎ ♟︎ ♟︎ ♟︎ ♟︎ ♟︎ ♟︎ ♟︎
+  1  ♜ ♞ ♝ ♛ ♚ ♝ ♞ ♜
+
+     a b c d e f g h
+
+ Side: White
+ Bitboard: 0xffff00000000ffff
+ Bitboard: 0b1111111111111111000000000000000000000000000000001111111111111111
+
+
+  8  ♖ ♘ ♗ ♕ ♔ ♗ ♘ ♖
+  7  ♙ ♙ ♙ ♙ ♙ ♙ ♙ ♙
+  6  . . . . . . . .
+  5  . . . . . . . .
+  4  . . . . . . . .
+  3  . . . . . . . .
+  2  ♟︎ ♟︎ ♟︎ ♟︎ ♟︎ ♟︎ ♟︎ ♟︎
+  1  ♜ ♞ ♝ ♛ ♚ ♝ ♞ ♜
+
+     a b c d e f g h
+
+ Side: White
+ Bitboard: 0xffff00000000ffff
+ Bitboard: 0b1111111111111111000000000000000000000000000000001111111111111111
+
+
+  8  .  .  .  .  .  .  .  . 
+  7  .  .  .  .  .  .  .  X 
+  6  .  .  .  .  .  .  X  . 
+  5  .  .  .  .  .  X  .  . 
+  4  .  .  .  .  .  .  .  . 
+  3  X  .  X  X  .  X  .  X 
+  2  X  X  X  X  X  X  X  X 
+  1  X  X  X  X  X  X  X  X 
+
+   a  b  c  d  e  f  g  h
+=== attacked squares for side: types.Color.White ===
+
+  8   bishopMask    : 0x200
+
+  8  0 0 0 0 0 0 0 0
+  7  0 1 0 0 0 0 0 0
+  6  0 0 0 0 0 0 0 0
+  5  0 0 0 0 0 0 0 0
+  4  0 0 0 0 0 0 0 0
+  3  0 0 0 0 0 0 0 0
+  2  0 0 0 0 0 0 0 0
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x200
+ Bitboard: 0b1000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x102
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0x500
+
+  8  0 0 0 0 0 0 0 0
+  7  1 0 1 0 0 0 0 0
+  6  0 0 0 0 0 0 0 0
+  5  0 0 0 0 0 0 0 0
+  4  0 0 0 0 0 0 0 0
+  3  0 0 0 0 0 0 0 0
+  2  0 0 0 0 0 0 0 0
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x500
+ Bitboard: 0b10100000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x205
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0xa00
+
+  8  0 0 0 0 0 0 0 0
+  7  0 1 0 1 0 0 0 0
+  6  0 0 0 0 0 0 0 0
+  5  0 0 0 0 0 0 0 0
+  4  0 0 0 0 0 0 0 0
+  3  0 0 0 0 0 0 0 0
+  2  0 0 0 0 0 0 0 0
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0xa00
+ Bitboard: 0b101000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x40a
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0x1400
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 1 0 1 0 0 0
+  6  0 0 0 0 0 0 0 0
+  5  0 0 0 0 0 0 0 0
+  4  0 0 0 0 0 0 0 0
+  3  0 0 0 0 0 0 0 0
+  2  0 0 0 0 0 0 0 0
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x1400
+ Bitboard: 0b1010000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x814
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0x2800
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 0 1 0 1 0 0
+  6  0 0 0 0 0 0 0 0
+  5  0 0 0 0 0 0 0 0
+  4  0 0 0 0 0 0 0 0
+  3  0 0 0 0 0 0 0 0
+  2  0 0 0 0 0 0 0 0
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x2800
+ Bitboard: 0b10100000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x1028
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0x5000
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 0 0 1 0 1 0
+  6  0 0 0 0 0 0 0 0
+  5  0 0 0 0 0 0 0 0
+  4  0 0 0 0 0 0 0 0
+  3  0 0 0 0 0 0 0 0
+  2  0 0 0 0 0 0 0 0
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x5000
+ Bitboard: 0b101000000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x2050
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0xa000
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 0 0 0 1 0 1
+  6  0 0 0 0 0 0 0 0
+  5  0 0 0 0 0 0 0 0
+  4  0 0 0 0 0 0 0 0
+  3  0 0 0 0 0 0 0 0
+  2  0 0 0 0 0 0 0 0
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0xa000
+ Bitboard: 0b1010000000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x40a0
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0x4000
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 0 0 0 0 1 0
+  6  0 0 0 0 0 0 0 0
+  5  0 0 0 0 0 0 0 0
+  4  0 0 0 0 0 0 0 0
+  3  0 0 0 0 0 0 0 0
+  2  0 0 0 0 0 0 0 0
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x4000
+ Bitboard: 0b100000000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x8040
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ . 
+  7   bishopMask    : 0x20100804020002
+
+  8  0 1 0 0 0 0 0 0
+  7  0 0 0 0 0 0 0 0
+  6  0 1 0 0 0 0 0 0
+  5  0 0 1 0 0 0 0 0
+  4  0 0 0 1 0 0 0 0
+  3  0 0 0 0 1 0 0 0
+  2  0 0 0 0 0 1 0 0
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x20100804020002
+ Bitboard: 0b100000000100000000100000000100000000100000000000000010
+
+  bishopAttackers: 0x0
+  rookMask      : 0x1010101010201
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0x40201008050005
+
+  8  1 0 1 0 0 0 0 0
+  7  0 0 0 0 0 0 0 0
+  6  1 0 1 0 0 0 0 0
+  5  0 0 0 1 0 0 0 0
+  4  0 0 0 0 1 0 0 0
+  3  0 0 0 0 0 1 0 0
+  2  0 0 0 0 0 0 1 0
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x40201008050005
+ Bitboard: 0b1000000001000000001000000001000000001010000000000000101
+
+  bishopAttackers: 0x0
+  rookMask      : 0x2020202020502
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0x804020110a000a
+
+  8  0 1 0 1 0 0 0 0
+  7  0 0 0 0 0 0 0 0
+  6  0 1 0 1 0 0 0 0
+  5  1 0 0 0 1 0 0 0
+  4  0 0 0 0 0 1 0 0
+  3  0 0 0 0 0 0 1 0
+  2  0 0 0 0 0 0 0 1
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x804020110a000a
+ Bitboard: 0b10000000010000000010000000010001000010100000000000001010
+
+  bishopAttackers: 0x0
+  rookMask      : 0x4040404040a04
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0x804122140014
+
+  8  0 0 1 0 1 0 0 0
+  7  0 0 0 0 0 0 0 0
+  6  0 0 1 0 1 0 0 0
+  5  0 1 0 0 0 1 0 0
+  4  1 0 0 0 0 0 1 0
+  3  0 0 0 0 0 0 0 1
+  2  0 0 0 0 0 0 0 0
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x804122140014
+ Bitboard: 0b100000000100000100100010000101000000000000010100
+
+  bishopAttackers: 0x0
+  rookMask      : 0x8080808081408
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0x18244280028
+
+  8  0 0 0 1 0 1 0 0
+  7  0 0 0 0 0 0 0 0
+  6  0 0 0 1 0 1 0 0
+  5  0 0 1 0 0 0 1 0
+  4  0 1 0 0 0 0 0 1
+  3  1 0 0 0 0 0 0 0
+  2  0 0 0 0 0 0 0 0
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x18244280028
+ Bitboard: 0b11000001001000100001010000000000000101000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x10101010102810
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0x1020488500050
+
+  8  0 0 0 0 1 0 1 0
+  7  0 0 0 0 0 0 0 0
+  6  0 0 0 0 1 0 1 0
+  5  0 0 0 1 0 0 0 1
+  4  0 0 1 0 0 0 0 0
+  3  0 1 0 0 0 0 0 0
+  2  1 0 0 0 0 0 0 0
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x1020488500050
+ Bitboard: 0b1000000100000010010001000010100000000000001010000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x20202020205020
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0x2040810a000a0
+
+  8  0 0 0 0 0 1 0 1
+  7  0 0 0 0 0 0 0 0
+  6  0 0 0 0 0 1 0 1
+  5  0 0 0 0 1 0 0 0
+  4  0 0 0 1 0 0 0 0
+  3  0 0 1 0 0 0 0 0
+  2  0 1 0 0 0 0 0 0
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x2040810a000a0
+ Bitboard: 0b10000001000000100000010000101000000000000010100000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x4040404040a040
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ . === BISHOP DEBUG for square 15 ===
+  occ=0xffff00000000ffff
+  mask=0x4081020400000
+  relevant=0x4000000000000
+  magic=0x2082082000
+  shift=59
+  raw_idx=16
+  idx=16
+  result=0x2040810204080040
+  direct=0x40810204080040
+  match: false
+===============================
+
+  bishopMask    : 0x2040810204080040
+
+  8  0 0 0 0 0 0 1 0
+  7  0 0 0 0 0 0 0 0
+  6  0 0 0 1 0 0 0 0
+  5  0 0 1 0 0 0 0 0
+  4  0 1 0 0 0 0 0 0
+  3  1 0 0 0 0 0 0 1
+  2  0 0 0 0 0 0 1 0
+  1  0 0 0 0 0 1 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x2040810204080040
+ Bitboard: 0b10000001000000100000010000001000000100000010000000000001000000
+
+  bishopAttackers: 0x2000000000000000
+  rookMask      : 0x80808080804080
+  rookAttackers : 0x0
+  combined attackers: 0x2000000000000000
+ X 
+  6   bishopMask    : 0x10080402000200
+
+  8  0 0 0 0 0 0 0 0
+  7  0 1 0 0 0 0 0 0
+  6  0 0 0 0 0 0 0 0
+  5  0 1 0 0 0 0 0 0
+  4  0 0 1 0 0 0 0 0
+  3  0 0 0 1 0 0 0 0
+  2  0 0 0 0 1 0 0 0
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x10080402000200
+ Bitboard: 0b10000000010000000010000000010000000000000001000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x1010101fe0100
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0x20100805000500
+
+  8  0 0 0 0 0 0 0 0
+  7  1 0 1 0 0 0 0 0
+  6  0 0 0 0 0 0 0 0
+  5  1 0 1 0 0 0 0 0
+  4  0 0 0 1 0 0 0 0
+  3  0 0 0 0 1 0 0 0
+  2  0 0 0 0 0 1 0 0
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x20100805000500
+ Bitboard: 0b100000000100000000100000000101000000000000010100000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x2020202fd0200
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0x4020110a000a00
+
+  8  0 0 0 0 0 0 0 0
+  7  0 1 0 1 0 0 0 0
+  6  0 0 0 0 0 0 0 0
+  5  0 1 0 1 0 0 0 0
+  4  1 0 0 0 1 0 0 0
+  3  0 0 0 0 0 1 0 0
+  2  0 0 0 0 0 0 1 0
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x4020110a000a00
+ Bitboard: 0b1000000001000000001000100001010000000000000101000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x4040404fb0400
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0x80412214001400
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 1 0 1 0 0 0
+  6  0 0 0 0 0 0 0 0
+  5  0 0 1 0 1 0 0 0
+  4  0 1 0 0 0 1 0 0
+  3  1 0 0 0 0 0 1 0
+  2  0 0 0 0 0 0 0 1
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x80412214001400
+ Bitboard: 0b10000000010000010010001000010100000000000001010000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x8080808f70800
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0x1824428002800
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 0 1 0 1 0 0
+  6  0 0 0 0 0 0 0 0
+  5  0 0 0 1 0 1 0 0
+  4  0 0 1 0 0 0 1 0
+  3  0 1 0 0 0 0 0 1
+  2  1 0 0 0 0 0 0 0
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x1824428002800
+ Bitboard: 0b1100000100100010000101000000000000010100000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x10101010ef1000
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0x2048850005000
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 0 0 1 0 1 0
+  6  0 0 0 0 0 0 0 0
+  5  0 0 0 0 1 0 1 0
+  4  0 0 0 1 0 0 0 1
+  3  0 0 1 0 0 0 0 0
+  2  0 1 0 0 0 0 0 0
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x2048850005000
+ Bitboard: 0b10000001001000100001010000000000000101000000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x20202020df2000
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ . === BISHOP DEBUG for square 22 ===
+  occ=0xffff00000000ffff
+  mask=0x4081020002000
+  relevant=0x4000000002000
+  magic=0x400082082000
+  shift=59
+  raw_idx=17
+  idx=17
+  result=0x2040810284082000
+  direct=0x40810284082000
+  match: false
+===============================
+
+  bishopMask    : 0x2040810284082000
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 0 0 0 1 0 0
+  6  0 0 0 1 0 0 0 0
+  5  0 0 1 0 0 0 0 1
+  4  0 1 0 0 0 0 0 0
+  3  1 0 0 0 0 0 0 1
+  2  0 0 0 0 0 0 1 0
+  1  0 0 0 0 0 1 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x2040810284082000
+ Bitboard: 0b10000001000000100000010000001010000100000010000010000000000000
+
+  bishopAttackers: 0x2000000000000000
+  rookMask      : 0x40404040bf4000
+  rookAttackers : 0x0
+  combined attackers: 0x2000000000000000
+ X   bishopMask    : 0x4081020408004000
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 0 0 0 0 1 0
+  6  0 0 0 0 0 0 0 0
+  5  0 0 0 1 0 0 0 0
+  4  0 0 1 0 0 0 0 0
+  3  0 1 0 0 0 0 0 0
+  2  1 0 0 0 0 0 0 1
+  1  0 0 0 0 0 0 1 0
+
+     a b c d e f g h
+
+ Bitboard: 0x4081020408004000
+ Bitboard: 0b100000010000001000000100000010000001000000000000100000000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x808080807f8000
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ . 
+  5   bishopMask    : 0x8040200020400
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 1 0 0 0 0 0
+  6  0 1 0 0 0 0 0 0
+  5  0 0 0 0 0 0 0 0
+  4  0 1 0 0 0 0 0 0
+  3  0 0 1 0 0 0 0 0
+  2  0 0 0 1 0 0 0 0
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x8040200020400
+ Bitboard: 0b1000000001000000001000000000000000100000010000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x10101fe010100
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0x10080500050800
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 0 1 0 0 0 0
+  6  1 0 1 0 0 0 0 0
+  5  0 0 0 0 0 0 0 0
+  4  1 0 1 0 0 0 0 0
+  3  0 0 0 1 0 0 0 0
+  2  0 0 0 0 1 0 0 0
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x10080500050800
+ Bitboard: 0b10000000010000000010100000000000001010000100000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x20202fd020200
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0x20110a000a1100
+
+  8  0 0 0 0 0 0 0 0
+  7  1 0 0 0 1 0 0 0
+  6  0 1 0 1 0 0 0 0
+  5  0 0 0 0 0 0 0 0
+  4  0 1 0 1 0 0 0 0
+  3  1 0 0 0 1 0 0 0
+  2  0 0 0 0 0 1 0 0
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x20110a000a1100
+ Bitboard: 0b100000000100010000101000000000000010100001000100000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x40404fb040400
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0x41221400142200
+
+  8  0 0 0 0 0 0 0 0
+  7  0 1 0 0 0 1 0 0
+  6  0 0 1 0 1 0 0 0
+  5  0 0 0 0 0 0 0 0
+  4  0 0 1 0 1 0 0 0
+  3  0 1 0 0 0 1 0 0
+  2  1 0 0 0 0 0 1 0
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x41221400142200
+ Bitboard: 0b1000001001000100001010000000000000101000010001000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x80808f7080800
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0x82442800284400
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 1 0 0 0 1 0
+  6  0 0 0 1 0 1 0 0
+  5  0 0 0 0 0 0 0 0
+  4  0 0 0 1 0 1 0 0
+  3  0 0 1 0 0 0 1 0
+  2  0 1 0 0 0 0 0 1
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x82442800284400
+ Bitboard: 0b10000010010001000010100000000000001010000100010000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x101010ef101000
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ . === BISHOP DEBUG for square 29 ===
+  occ=0xffff00000000ffff
+  mask=0x4085000500800
+  relevant=0x4000000000800
+  magic=0x404002011000
+  shift=57
+  raw_idx=33
+  idx=33
+  result=0x2040814204180800
+  direct=0x40814204180800
+  match: false
+===============================
+
+  bishopMask    : 0x2040814204180800
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 0 1 0 0 0 0
+  6  0 0 0 1 1 0 0 0
+  5  0 0 1 0 0 0 0 0
+  4  0 1 0 0 0 0 1 0
+  3  1 0 0 0 0 0 0 1
+  2  0 0 0 0 0 0 1 0
+  1  0 0 0 0 0 1 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x2040814204180800
+ Bitboard: 0b10000001000000100000010100001000000100000110000000100000000000
+
+  bishopAttackers: 0x2000000000000000
+  rookMask      : 0x202020df202000
+  rookAttackers : 0x0
+  combined attackers: 0x2000000000000000
+ X   bishopMask    : 0x4081028408201000
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 0 0 1 0 0 0
+  6  0 0 0 0 0 1 0 0
+  5  0 0 0 1 0 0 0 0
+  4  0 0 1 0 0 0 0 1
+  3  0 1 0 0 0 0 0 0
+  2  1 0 0 0 0 0 0 1
+  1  0 0 0 0 0 0 1 0
+
+     a b c d e f g h
+
+ Bitboard: 0x4081028408201000
+ Bitboard: 0b100000010000001000000101000010000001000001000000001000000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x404040bf404000
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0x8102040800402000
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 0 0 0 1 0 0
+  6  0 0 0 0 0 0 1 0
+  5  0 0 0 0 0 0 0 0
+  4  0 0 0 1 0 0 0 0
+  3  0 0 1 0 0 0 0 0
+  2  0 1 0 0 0 0 0 0
+  1  1 0 0 0 0 0 0 1
+
+     a b c d e f g h
+
+ Bitboard: 0x8102040800402000
+ Bitboard: 0b1000000100000010000001000000100000000000010000000010000000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x8080807f808000
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ . 
+  4   bishopMask    : 0x4020002040800
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 0 1 0 0 0 0
+  6  0 0 1 0 0 0 0 0
+  5  0 1 0 0 0 0 0 0
+  4  0 0 0 0 0 0 0 0
+  3  0 1 0 0 0 0 0 0
+  2  0 0 1 0 0 0 0 0
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x4020002040800
+ Bitboard: 0b100000000100000000000000010000001000000100000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x101fe01010100
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0x8050005081000
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 0 0 1 0 0 0
+  6  0 0 0 1 0 0 0 0
+  5  1 0 1 0 0 0 0 0
+  4  0 0 0 0 0 0 0 0
+  3  1 0 1 0 0 0 0 0
+  2  0 0 0 1 0 0 0 0
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x8050005081000
+ Bitboard: 0b1000000001010000000000000101000010000001000000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x202fd02020200
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0x110a000a112000
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 0 0 0 1 0 0
+  6  1 0 0 0 1 0 0 0
+  5  0 1 0 1 0 0 0 0
+  4  0 0 0 0 0 0 0 0
+  3  0 1 0 1 0 0 0 0
+  2  1 0 0 0 1 0 0 0
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x110a000a112000
+ Bitboard: 0b10001000010100000000000001010000100010010000000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x404fb04040400
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0x22140014224100
+
+  8  0 0 0 0 0 0 0 0
+  7  1 0 0 0 0 0 1 0
+  6  0 1 0 0 0 1 0 0
+  5  0 0 1 0 1 0 0 0
+  4  0 0 0 0 0 0 0 0
+  3  0 0 1 0 1 0 0 0
+  2  0 1 0 0 0 1 0 0
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x22140014224100
+ Bitboard: 0b100010000101000000000000010100001000100100000100000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x808f708080800
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ . === BISHOP DEBUG for square 36 ===
+  occ=0xffff00000000ffff
+  mask=0x44280028440200
+  relevant=0x44000000000200
+  magic=0x404040040100
+  shift=55
+  raw_idx=137
+  idx=137
+  result=0x40a1020c0c0200
+  direct=0x40a1020c0c0200
+  match: true
+===============================
+
+  bishopMask    : 0x40a1020c0c0200
+
+  8  0 0 0 0 0 0 0 0
+  7  0 1 0 0 0 0 0 0
+  6  0 0 1 1 0 0 0 0
+  5  0 0 1 1 0 0 0 0
+  4  0 1 0 0 0 0 0 0
+  3  1 0 0 0 0 1 0 1
+  2  0 0 0 0 0 0 1 0
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x40a1020c0c0200
+ Bitboard: 0b1000000101000010000001000001100000011000000001000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x1010ef10101000
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0x4081420418080400
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 1 0 0 0 0 0
+  6  0 0 0 1 0 0 0 0
+  5  0 0 0 1 1 0 0 0
+  4  0 0 1 0 0 0 0 0
+  3  0 1 0 0 0 0 1 0
+  2  1 0 0 0 0 0 0 1
+  1  0 0 0 0 0 0 1 0
+
+     a b c d e f g h
+
+ Bitboard: 0x4081420418080400
+ Bitboard: 0b100000010000001010000100000010000011000000010000000010000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x2020df20202000
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0x8102840820100800
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 0 1 0 0 0 0
+  6  0 0 0 0 1 0 0 0
+  5  0 0 0 0 0 1 0 0
+  4  0 0 0 1 0 0 0 0
+  3  0 0 1 0 0 0 0 1
+  2  0 1 0 0 0 0 0 0
+  1  1 0 0 0 0 0 0 1
+
+     a b c d e f g h
+
+ Bitboard: 0x8102840820100800
+ Bitboard: 0b1000000100000010100001000000100000100000000100000000100000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x4040bf40404000
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0x20400040201000
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 0 0 1 0 0 0
+  6  0 0 0 0 0 1 0 0
+  5  0 0 0 0 0 0 1 0
+  4  0 0 0 0 0 0 0 0
+  3  0 0 0 0 0 0 1 0
+  2  0 0 0 0 0 1 0 0
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x20400040201000
+ Bitboard: 0b100000010000000000000001000000001000000001000000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x80807f80808000
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ . 
+  3   bishopMask    : 0x2000204081000
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 0 0 1 0 0 0
+  6  0 0 0 1 0 0 0 0
+  5  0 0 1 0 0 0 0 0
+  4  0 1 0 0 0 0 0 0
+  3  0 0 0 0 0 0 0 0
+  2  0 1 0 0 0 0 0 0
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x2000204081000
+ Bitboard: 0b10000000000000001000000100000010000001000000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x1fe0101010100
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0x5000508102000
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 0 0 0 1 0 0
+  6  0 0 0 0 1 0 0 0
+  5  0 0 0 1 0 0 0 0
+  4  1 0 1 0 0 0 0 0
+  3  0 0 0 0 0 0 0 0
+  2  1 0 1 0 0 0 0 0
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x5000508102000
+ Bitboard: 0b101000000000000010100001000000100000010000000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x2fd0202020200
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0xa000a11204000
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 0 0 0 0 1 0
+  6  0 0 0 0 0 1 0 0
+  5  1 0 0 0 1 0 0 0
+  4  0 1 0 1 0 0 0 0
+  3  0 0 0 0 0 0 0 0
+  2  0 1 0 1 0 0 0 0
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0xa000a11204000
+ Bitboard: 0b1010000000000000101000010001001000000100000000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x4fb0404040400
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0x2050810606090000
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 0 0 0 0 0 0
+  6  1 0 0 1 0 0 0 0
+  5  0 1 1 0 0 0 0 0
+  4  0 1 1 0 0 0 0 0
+  3  1 0 0 0 0 0 0 1
+  2  0 0 0 0 1 0 1 0
+  1  0 0 0 0 0 1 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x2050810606090000
+ Bitboard: 0b10000001010000100000010000011000000110000010010000000000000000
+
+  bishopAttackers: 0x2000000000000000
+  rookMask      : 0x8f70808080800
+  rookAttackers : 0x0
+  combined attackers: 0x2000000000000000
+ X   bishopMask    : 0x40a1020c0c020100
+
+  8  0 0 0 0 0 0 0 0
+  7  1 0 0 0 0 0 0 0
+  6  0 1 0 0 0 0 0 0
+  5  0 0 1 1 0 0 0 0
+  4  0 0 1 1 0 0 0 0
+  3  0 1 0 0 0 0 0 0
+  2  1 0 0 0 0 1 0 1
+  1  0 0 0 0 0 0 1 0
+
+     a b c d e f g h
+
+ Bitboard: 0x40a1020c0c020100
+ Bitboard: 0b100000010100001000000100000110000001100000000100000000100000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x10ef1010101000
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0x8142041808040200
+
+  8  0 0 0 0 0 0 0 0
+  7  0 1 0 0 0 0 0 0
+  6  0 0 1 0 0 0 0 0
+  5  0 0 0 1 0 0 0 0
+  4  0 0 0 1 1 0 0 0
+  3  0 0 1 0 0 0 0 0
+  2  0 1 0 0 0 0 1 0
+  1  1 0 0 0 0 0 0 1
+
+     a b c d e f g h
+
+ Bitboard: 0x8142041808040200
+ Bitboard: 0b1000000101000010000001000001100000001000000001000000001000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x20df2020202000
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0xa000a010080400
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 1 0 0 0 0 0
+  6  0 0 0 1 0 0 0 0
+  5  0 0 0 0 1 0 0 0
+  4  0 0 0 0 0 1 0 1
+  3  0 0 0 0 0 0 0 0
+  2  0 0 0 0 0 1 0 1
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0xa000a010080400
+ Bitboard: 0b10100000000000001010000000010000000010000000010000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x40bf4040404000
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0x40004020100800
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 0 1 0 0 0 0
+  6  0 0 0 0 1 0 0 0
+  5  0 0 0 0 0 1 0 0
+  4  0 0 0 0 0 0 1 0
+  3  0 0 0 0 0 0 0 0
+  2  0 0 0 0 0 0 1 0
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x40004020100800
+ Bitboard: 0b1000000000000000100000000100000000100000000100000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x807f8080808000
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ . 
+  2   bishopMask    : 0x200020408102000
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 0 0 0 1 0 0
+  6  0 0 0 0 1 0 0 0
+  5  0 0 0 1 0 0 0 0
+  4  0 0 1 0 0 0 0 0
+  3  0 1 0 0 0 0 0 0
+  2  0 0 0 0 0 0 0 0
+  1  0 1 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x200020408102000
+ Bitboard: 0b1000000000000000100000010000001000000100000010000000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x102010101010100
+  rookAttackers : 0x100000000000000
+  combined attackers: 0x100000000000000
+ X   bishopMask    : 0x500050810204000
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 0 0 0 0 1 0
+  6  0 0 0 0 0 1 0 0
+  5  0 0 0 0 1 0 0 0
+  4  0 0 0 1 0 0 0 0
+  3  1 0 1 0 0 0 0 0
+  2  0 0 0 0 0 0 0 0
+  1  1 0 1 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x500050810204000
+ Bitboard: 0b10100000000000001010000100000010000001000000100000000000000
+
+  bishopAttackers: 0x400000000000000
+  rookMask      : 0x205020202020200
+  rookAttackers : 0x0
+  combined attackers: 0x400000000000000
+ X   bishopMask    : 0x2840830304080000
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 0 0 0 0 0 0
+  6  0 0 0 1 0 0 0 0
+  5  0 0 1 0 0 0 0 0
+  4  1 1 0 0 0 0 0 0
+  3  1 1 0 0 0 0 0 1
+  2  0 0 0 0 0 0 1 0
+  1  0 0 0 1 0 1 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x2840830304080000
+ Bitboard: 0b10100001000000100000110000001100000100000010000000000000000000
+
+  bishopAttackers: 0x2800000000000000
+  rookMask      : 0x40a040404040400
+  rookAttackers : 0x0
+  combined attackers: 0x2800000000000000
+ X   bishopMask    : 0x5081060609000000
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 0 0 0 0 0 0
+  6  0 0 0 0 0 0 0 0
+  5  1 0 0 1 0 0 0 0
+  4  0 1 1 0 0 0 0 0
+  3  0 1 1 0 0 0 0 0
+  2  1 0 0 0 0 0 0 1
+  1  0 0 0 0 1 0 1 0
+
+     a b c d e f g h
+
+ Bitboard: 0x5081060609000000
+ Bitboard: 0b101000010000001000001100000011000001001000000000000000000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x814080808080800
+  rookAttackers : 0x800000000000000
+  combined attackers: 0x800000000000000
+ X   bishopMask    : 0xa1020c0c02010000
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 0 0 0 0 0 0
+  6  1 0 0 0 0 0 0 0
+  5  0 1 0 0 0 0 0 0
+  4  0 0 1 1 0 0 0 0
+  3  0 0 1 1 0 0 0 0
+  2  0 1 0 0 0 0 0 0
+  1  1 0 0 0 0 1 0 1
+
+     a b c d e f g h
+
+ Bitboard: 0xa1020c0c02010000
+ Bitboard: 0b1010000100000010000011000000110000000010000000010000000000000000
+
+  bishopAttackers: 0x2000000000000000
+  rookMask      : 0x1028101010101000
+  rookAttackers : 0x0
+  combined attackers: 0x2000000000000000
+ X   bishopMask    : 0x5000508804020100
+
+  8  0 0 0 0 0 0 0 0
+  7  1 0 0 0 0 0 0 0
+  6  0 1 0 0 0 0 0 0
+  5  0 0 1 0 0 0 0 0
+  4  0 0 0 1 0 0 0 1
+  3  0 0 0 0 1 0 1 0
+  2  0 0 0 0 0 0 0 0
+  1  0 0 0 0 1 0 1 0
+
+     a b c d e f g h
+
+ Bitboard: 0x5000508804020100
+ Bitboard: 0b101000000000000010100001000100000000100000000100000000100000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x2050202020202000
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0xa000a01008040200
+
+  8  0 0 0 0 0 0 0 0
+  7  0 1 0 0 0 0 0 0
+  6  0 0 1 0 0 0 0 0
+  5  0 0 0 1 0 0 0 0
+  4  0 0 0 0 1 0 0 0
+  3  0 0 0 0 0 1 0 1
+  2  0 0 0 0 0 0 0 0
+  1  0 0 0 0 0 1 0 1
+
+     a b c d e f g h
+
+ Bitboard: 0xa000a01008040200
+ Bitboard: 0b1010000000000000101000000001000000001000000001000000001000000000
+
+  bishopAttackers: 0x2000000000000000
+  rookMask      : 0x40a0404040404000
+  rookAttackers : 0x0
+  combined attackers: 0x2000000000000000
+ X   bishopMask    : 0x4000402010080400
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 1 0 0 0 0 0
+  6  0 0 0 1 0 0 0 0
+  5  0 0 0 0 1 0 0 0
+  4  0 0 0 0 0 1 0 0
+  3  0 0 0 0 0 0 1 0
+  2  0 0 0 0 0 0 0 0
+  1  0 0 0 0 0 0 1 0
+
+     a b c d e f g h
+
+ Bitboard: 0x4000402010080400
+ Bitboard: 0b100000000000000010000000010000000010000000010000000010000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x8040808080808000
+  rookAttackers : 0x8000000000000000
+  combined attackers: 0x8000000000000000
+ X 
+  1   bishopMask    : 0x2000000000000
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 0 0 0 0 0 0
+  6  0 0 0 0 0 0 0 0
+  5  0 0 0 0 0 0 0 0
+  4  0 0 0 0 0 0 0 0
+  3  0 0 0 0 0 0 0 0
+  2  0 1 0 0 0 0 0 0
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x2000000000000
+ Bitboard: 0b10000000000000000000000000000000000000000000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x201000000000000
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0x2041810204080000
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 0 0 0 0 0 0
+  6  0 0 0 1 0 0 0 0
+  5  0 0 1 0 0 0 0 0
+  4  0 1 0 0 0 0 0 0
+  3  1 0 0 0 0 0 0 1
+  2  1 0 0 0 0 0 1 0
+  1  0 0 0 0 0 1 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x2041810204080000
+ Bitboard: 0b10000001000001100000010000001000000100000010000000000000000000
+
+  bishopAttackers: 0x2000000000000000
+  rookMask      : 0x502000000000000
+  rookAttackers : 0x100000000000000
+  combined attackers: 0x2100000000000000
+ X   bishopMask    : 0x4083020408000000
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 0 0 0 0 0 0
+  6  0 0 0 0 0 0 0 0
+  5  0 0 0 1 0 0 0 0
+  4  0 0 1 0 0 0 0 0
+  3  0 1 0 0 0 0 0 0
+  2  1 1 0 0 0 0 0 1
+  1  0 0 0 0 0 0 1 0
+
+     a b c d e f g h
+
+ Bitboard: 0x4083020408000000
+ Bitboard: 0b100000010000011000000100000010000001000000000000000000000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0xa04000000000000
+  rookAttackers : 0x800000000000000
+  combined attackers: 0x800000000000000
+ X   bishopMask    : 0x8106040800000000
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 0 0 0 0 0 0
+  6  0 0 0 0 0 0 0 0
+  5  0 0 0 0 0 0 0 0
+  4  0 0 0 1 0 0 0 0
+  3  0 0 1 0 0 0 0 0
+  2  0 1 1 0 0 0 0 0
+  1  1 0 0 0 0 0 0 1
+
+     a b c d e f g h
+
+ Bitboard: 0x8106040800000000
+ Bitboard: 0b1000000100000110000001000000100000000000000000000000000000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x1408000000000000
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0x28000000000000
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 0 0 0 0 0 0
+  6  0 0 0 0 0 0 0 0
+  5  0 0 0 0 0 0 0 0
+  4  0 0 0 0 0 0 0 0
+  3  0 0 0 0 0 0 0 0
+  2  0 0 0 1 0 1 0 0
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x28000000000000
+ Bitboard: 0b101000000000000000000000000000000000000000000000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x2810000000000000
+  rookAttackers : 0x800000000000000
+  combined attackers: 0x800000000000000
+ X   bishopMask    : 0x50000000000000
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 0 0 0 0 0 0
+  6  0 0 0 0 0 0 0 0
+  5  0 0 0 0 0 0 0 0
+  4  0 0 0 0 0 0 0 0
+  3  0 0 0 0 0 0 0 0
+  2  0 0 0 0 1 0 1 0
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x50000000000000
+ Bitboard: 0b1010000000000000000000000000000000000000000000000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x5020000000000000
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ .   bishopMask    : 0xa0000000000000
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 0 0 0 0 0 0
+  6  0 0 0 0 0 0 0 0
+  5  0 0 0 0 0 0 0 0
+  4  0 0 0 0 0 0 0 0
+  3  0 0 0 0 0 0 0 0
+  2  0 0 0 0 0 1 0 1
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0xa0000000000000
+ Bitboard: 0b10100000000000000000000000000000000000000000000000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0xa040000000000000
+  rookAttackers : 0x8000000000000000
+  combined attackers: 0x8000000000000000
+ X   bishopMask    : 0x40000000000000
+
+  8  0 0 0 0 0 0 0 0
+  7  0 0 0 0 0 0 0 0
+  6  0 0 0 0 0 0 0 0
+  5  0 0 0 0 0 0 0 0
+  4  0 0 0 0 0 0 0 0
+  3  0 0 0 0 0 0 0 0
+  2  0 0 0 0 0 0 1 0
+  1  0 0 0 0 0 0 0 0
+
+     a b c d e f g h
+
+ Bitboard: 0x40000000000000
+ Bitboard: 0b1000000000000000000000000000000000000000000000000000000
+
+  bishopAttackers: 0x0
+  rookMask      : 0x4080000000000000
+  rookAttackers : 0x0
+  combined attackers: 0x0
+ . 
+
+   a  b  c  d  e  f  g  h
+
+=== end attacked squares ===
