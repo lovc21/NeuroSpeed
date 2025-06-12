@@ -14,7 +14,7 @@ This chess engine is still in development. When I have it in working order and w
 
 ## Strength
 
-**TODO:**
+**TODO :**
 
 - Update the strength table:
 
