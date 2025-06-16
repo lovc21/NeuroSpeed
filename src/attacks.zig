@@ -1,9 +1,10 @@
+const print = std.debug.print;
 const types = @import("types.zig");
 const std = @import("std");
-const print = std.debug.print;
 const tabele = @import("tabeles.zig");
 const util = @import("util.zig");
 const bitboard = @import("bitboard.zig");
+
 // generate knight attacks tabele
 pub inline fn knight_attacks_from_bitboard(bb: types.Bitboard) types.Bitboard {
     return (((bb << 17) & ~@intFromEnum(types.MaskFile.AFILE)) |
@@ -198,7 +199,10 @@ pub inline fn init_rook_attackes() void {
             var idx64: u64 = @as(u64, subset) *% magic;
             idx64 = idx64 >> shift;
             const idx: usize = @intCast(idx64);
-            Rook_attacks[square][idx] = get_rook_attacks_for_init(sq6, subset);
+            Rook_attacks[square][idx] = get_rook_attacks_for_init(
+                sq6,
+                subset,
+            );
             if (subset == 0) break;
             subset = (subset - 1) & mask;
         }
@@ -212,18 +216,63 @@ pub inline fn get_rook_attacks(square: u6, occ: u64) u64 {
     const relevant: u64 = occ & mask;
     const idx: usize = @intCast((relevant *% magic) >> shift);
 
-    // const result = Rook_attacks[square][idx];
-    //
-    // std.debug.print("LOOKUP sq={} mask=0x{x} occ&mask=0x{x}\n", .{ square, mask, relevant });
-    // std.debug.print("       magic=0x{x} shift={} → idx={} → result=0x{x}\n\n", .{ magic, shift, idx, result });
-    //
-    // bitboard.print_board(result);
-    //
     return Rook_attacks[square][idx];
 }
 
-pub inline fn get_bishop_attacks_for_init(square: u8, occ: u64) u64 {
-    return get_bishop_attacks_for_init(square, occ);
+// Correct on-the-fly attack generation for bishops using simple ray-casting.
+// This is a one-time cost at initialization.
+pub fn get_bishop_attacks_for_init(square: u8, blockers: u64) u64 {
+    var attacks: u64 = 0;
+    const r: i8 = @intCast(square / 8);
+    const f: i8 = @intCast(square % 8);
+    const one: u64 = 1;
+
+    // North-East
+    var cr = r + 1;
+    var cf = f + 1;
+    while (cr <= 7 and cf <= 7) : ({
+        cr += 1;
+        cf += 1;
+    }) {
+        const s = cr * 8 + cf;
+        attacks |= (one << @intCast(s));
+        if ((blockers & (one << @intCast(s))) != 0) break;
+    }
+    // South-West
+    cr = r - 1;
+    cf = f - 1;
+    while (cr >= 0 and cf >= 0) : ({
+        cr -= 1;
+        cf -= 1;
+    }) {
+        const s = cr * 8 + cf;
+        attacks |= (one << @intCast(s));
+        if ((blockers & (one << @intCast(s))) != 0) break;
+    }
+    // North-West
+    cr = r + 1;
+    cf = f - 1;
+    while (cr <= 7 and cf >= 0) : ({
+        cr += 1;
+        cf -= 1;
+    }) {
+        const s = cr * 8 + cf;
+        attacks |= (one << @intCast(s));
+        if ((blockers & (one << @intCast(s))) != 0) break;
+    }
+    // South-East
+    cr = r - 1;
+    cf = f + 1;
+    while (cr >= 0 and cf <= 7) : ({
+        cr -= 1;
+        cf += 1;
+    }) {
+        const s = cr * 8 + cf;
+        attacks |= (one << @intCast(s));
+        if ((blockers & (one << @intCast(s))) != 0) break;
+    }
+
+    return attacks;
 }
 
 //  bishop magice Bitboards
@@ -247,11 +296,24 @@ pub inline fn init_bishop_attackes() void {
             idx64 = idx64 >> shift;
             const idx: usize = @intCast(idx64);
 
-            const correct_attacks = get_bishop_attacks_for_init(sq6, subset);
+            const correct_attacks = get_bishop_attacks_for_init(
+                sq6,
+                subset,
+            );
 
             // Check for collision
-            if (Bishop_attacks[square][idx] != 0 and Bishop_attacks[square][idx] != correct_attacks) {
-                std.debug.panic("Magic collision detected for bishop square {} at index {}: existing=0x{x}, new=0x{x}\n", .{ square, idx, Bishop_attacks[square][idx], correct_attacks });
+            if (Bishop_attacks[square][idx] != 0 and
+                Bishop_attacks[square][idx] != correct_attacks)
+            {
+                std.debug.panic(
+                    "Magic collision detected for bishop square {} at index {}: existing=0x{x}, new=0x{x}\n",
+                    .{
+                        square,
+                        idx,
+                        Bishop_attacks[square][idx],
+                        correct_attacks,
+                    },
+                );
             }
 
             Bishop_attacks[square][idx] = correct_attacks;
@@ -267,17 +329,21 @@ pub inline fn get_bishop_attacks(square: u6, occ: u64) u64 {
     const magic: u64 = tabele.bishop_magics[square];
     const shift: u6 = @intCast(64 - tabele.Bishop_index_bit[square]);
     const relevant: u64 = occ & mask;
-    const raw_idx: u64 = (relevant *% magic) >> shift;
-    const idx: usize = @intCast(raw_idx);
+    const idx: usize = @intCast((relevant *% magic) >> shift);
     return Bishop_attacks[square][idx];
 }
 
 pub inline fn get_queen_attacks(square: u6, occ: u64) u64 {
-    const queen_attacks: u64 = get_bishop_attacks(square, occ) | get_rook_attacks(square, occ);
+    const queen_attacks: u64 = get_bishop_attacks(square, occ) |
+        get_rook_attacks(square, occ);
     return queen_attacks;
 }
 
-pub fn piece_attacks(square: u6, occ: u64, comptime Piece: types.PieceType) types.Bitboard {
+pub fn piece_attacks(
+    square: u6,
+    occ: u64,
+    comptime Piece: types.PieceType,
+) types.Bitboard {
     if (Piece != types.PieceType.Pawn) {
         return switch (Piece) {
             types.PieceType.Bishop => get_bishop_attacks(square, occ),
