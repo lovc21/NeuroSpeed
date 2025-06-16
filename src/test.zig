@@ -16,7 +16,6 @@ test "test print bitboard" {
 test "test print bitboard unicode" {
     var b: types.Board = .{
         .pieces = [_]types.Bitboard{0} ** types.Board.PieceCount,
-        .board = undefined,
         .side = types.Color.Black,
         .enpassant = types.square.e3,
         .castle = @intFromEnum(types.Castle.WK) | @intFromEnum(types.Castle.WQ) | @intFromEnum(types.Castle.BK) | @intFromEnum(types.Castle.BQ),
