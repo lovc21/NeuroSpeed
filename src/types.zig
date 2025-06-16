@@ -115,16 +115,16 @@ pub const MoveFlags = enum(u4) {
     CAPTURE = 0b1000, // 8
     CAPTURES = 0b1011, // 11
     EN_PASSANT = 0b1010, // 10
-    
+
     // Promotions (no capture)
     PR_KNIGHT = 0b0100, // 4
     PR_BISHOP = 0b0101, // 5
-    PR_ROOK =   0b0110, // 6
-    PR_QUEEN =  0b0111, // 7
+    PR_ROOK = 0b0110, // 6
+    PR_QUEEN = 0b0111, // 7
     PC_KNIGHT = 0b1100, // 12
     PC_BISHOP = 0b1101, // 13
-    PC_ROOK =   0b1110, // 14
-    PC_QUEEN =  0b1111, // 15
+    PC_ROOK = 0b1110, // 14
+    PC_QUEEN = 0b1111, // 15
 };
 
 pub const Castle = enum(u8) {
@@ -142,7 +142,7 @@ pub const Board = struct {
     side: Color,
     enpassant: square,
     castle: u8, // bitmask of Castle.*
-                
+
     pub fn pieces_combined(self: *const Board) Bitboard {
         var bb: Bitboard = 0;
         for (self.pieces) |p| bb |= p;
@@ -152,29 +152,27 @@ pub const Board = struct {
     pub fn new() Board {
         var b: Board = undefined;
 
-        @memset(b.pieces[0..],0);
+        @memset(b.pieces[0..], 0);
 
         b.side = Color.White;
         b.enpassant = square.NO_SQUARE;
         b.castle = 0;
-        return b; 
+        return b;
     }
 
-    pub inline fn set_pieces(self: *Board, comptime c: Color) Bitboard{
+    pub inline fn set_pieces(self: *Board, comptime c: Color) Bitboard {
         return if (c == Color.White) self.pieces[Piece.WHITE_PAWN.toU4()] * 8 | self.pieces[Piece.WHITE_KNIGHT.toU4()] | self.pieces[Piece.WHITE_BISHOP.toU4()] | self.pieces[Piece.WHITE_QUEEN.toU4()] | self.pieces[Piece.WHITE_KING.toU4()] else
-        self.pieces[Piece.BLACK_PAWN.toU4()] * 8 | self.pieces[Piece.BLACK_KNIGHT.toU4()] | self.pieces[Piece.BLACK_BISHOP.toU4()] | self.pieces[Piece.BLACK_QUEEN.toU4()] | self.pieces[Piece.BLACK_KING.toU4()];
-
+            self.pieces[Piece.BLACK_PAWN.toU4()] * 8 | self.pieces[Piece.BLACK_KNIGHT.toU4()] | self.pieces[Piece.BLACK_BISHOP.toU4()] | self.pieces[Piece.BLACK_QUEEN.toU4()] | self.pieces[Piece.BLACK_KING.toU4()];
     }
 
     pub inline fn set_white(self: *Board) Bitboard {
-        return  self.pieces[Piece.WHITE_PAWN.toU4()] * 8 | self.pieces[Piece.WHITE_KNIGHT.toU4()] | self.pieces[Piece.WHITE_BISHOP.toU4()] | self.pieces[Piece.WHITE_QUEEN.toU4()] | self.pieces[Piece.WHITE_KING.toU4()]; 
+        return self.pieces[Piece.WHITE_PAWN.toU4()] * 8 | self.pieces[Piece.WHITE_KNIGHT.toU4()] | self.pieces[Piece.WHITE_BISHOP.toU4()] | self.pieces[Piece.WHITE_QUEEN.toU4()] | self.pieces[Piece.WHITE_KING.toU4()];
     }
 
     pub inline fn set_black(self: *Board) Bitboard {
-        return  self.pieces[Piece.BLACK_PAWN.toU4()] * 8 | self.pieces[Piece.BLACK_KNIGHT.toU4()] | self.pieces[Piece.BLACK_BISHOP.toU4()] | self.pieces[Piece.BLACK_QUEEN.toU4()] | self.pieces[Piece.BLACK_KING.toU4()];
+        return self.pieces[Piece.BLACK_PAWN.toU4()] * 8 | self.pieces[Piece.BLACK_KNIGHT.toU4()] | self.pieces[Piece.BLACK_BISHOP.toU4()] | self.pieces[Piece.BLACK_QUEEN.toU4()] | self.pieces[Piece.BLACK_KING.toU4()];
     }
 };
-
 
 // Attacking directions for the pieces
 pub const Direction = enum(i32) {

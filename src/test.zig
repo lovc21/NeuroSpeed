@@ -376,3 +376,55 @@ test "test fen parsing" {
         );
     }
 }
+
+test "is square attacked" {
+    attacks.init_attacks();
+
+    const AttackTestVector = struct {
+        fen: []const u8,
+        white_attacks: u64,
+        black_attacks: u64,
+    };
+
+    const test_vectors = [_]AttackTestVector{
+        .{ .fen = "8/8/8/8/8/8/8/8 w - - ", .white_attacks = 0x0000000000000000, .black_attacks = 0x0000000000000000 },
+        .{ .fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", .white_attacks = 9151313343305220096, .black_attacks = 16777086 },
+    };
+
+    for (test_vectors) |vector| {
+        var board = types.Board.new();
+        try bitboard.fan_pars(vector.fen, &board);
+
+        var generated_white_attacks: u64 = 0;
+        var generated_black_attacks: u64 = 0;
+
+        for (0..64) |sq_idx| {
+            const sq: u6 = @intCast(sq_idx);
+            if (bitboard.is_square_attacked(&board, sq, .White)) {
+                generated_white_attacks |= (@as(u64, 1) << sq);
+            }
+            if (bitboard.is_square_attacked(&board, sq, .Black)) {
+                generated_black_attacks |= (@as(u64, 1) << sq);
+            }
+        }
+
+        // Use if-statements to provide more context on failure
+        if (vector.white_attacks != generated_white_attacks) {
+            std.debug.print("\n\nWhite attack mismatch for FEN: {s}\n", .{vector.fen});
+            std.debug.print("Expected: 0x{x}\n", .{vector.white_attacks});
+            bitboard.print_board(vector.white_attacks);
+            std.debug.print("Got: 0x{x}\n", .{generated_white_attacks});
+            bitboard.print_board(generated_white_attacks);
+        }
+        try std.testing.expectEqual(vector.white_attacks, generated_white_attacks);
+
+        if (vector.black_attacks != generated_black_attacks) {
+            std.debug.print("\n\nBlack attack mismatch for FEN: {s}\n", .{vector.fen});
+            std.debug.print("Expected: 0x{x}\n", .{vector.black_attacks});
+            bitboard.print_board(vector.black_attacks);
+            std.debug.print("Got: 0x{x}\n", .{generated_black_attacks});
+            bitboard.print_board(generated_black_attacks);
+        }
+        try std.testing.expectEqual(vector.black_attacks, generated_black_attacks);
+    }
+}
