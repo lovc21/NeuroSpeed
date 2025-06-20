@@ -12,14 +12,14 @@ pub const number_of_squares = 64;
 // Little endian rank-file (LERF) mapping
 pub const square = enum {
     // zig fmt: off
-    a8, b8, c8, d8, e8, f8, g8, h8,
-    a7, b7, c7, d7, e7, f7, g7, h7,
-    a6, b6, c6, d6, e6, f6, g6, h6,
-    a5, b5, c5, d5, e5, f5, g5, h5,
-    a4, b4, c4, d4, e4, f4, g4, h4,
-    a3, b3, c3, d3, e3, f3, g3, h3,
+    a1, b1, c1, d1, e1, f1, g1, h1,
     a2, b2, c2, d2, e2, f2, g2, h2,
-    a1, b1, c1, d1, e1, f1, g1, h1, 
+    a3, b3, c3, d3, e3, f3, g3, h3,
+    a4, b4, c4, d4, e4, f4, g4, h4,
+    a5, b5, c5, d5, e5, f5, g5, h5,
+    a6, b6, c6, d6, e6, f6, g6, h6,
+    a7, b7, c7, d7, e7, f7, g7, h7,
+    a8, b8, c8, d8, e8, f8, g8, h8,
     NO_SQUARE,
     // zig fmt: on
     //
@@ -33,27 +33,27 @@ pub const square = enum {
 };
 
 pub const square_number = [_]usize{
-    56, 57, 58, 59, 60, 61, 62, 63,
-    48, 49, 50, 51, 52, 53, 54, 55,
-    40, 41, 42, 43, 44, 45, 46, 47,
-    32, 33, 34, 35, 36, 37, 38, 39,
-    24, 25, 26, 27, 28, 29, 30, 31,
-    16, 17, 18, 19, 20, 21, 22, 23,
-    8,  9,  10, 11, 12, 13, 14, 15,
     0,  1,  2,  3,  4,  5,  6,  7,
+    8,  9,  10, 11, 12, 13, 14, 15,
+    16, 17, 18, 19, 20, 21, 22, 23,
+    24, 25, 26, 27, 28, 29, 30, 31,
+    32, 33, 34, 35, 36, 37, 38, 39,
+    40, 41, 42, 43, 44, 45, 46, 47,
+    48, 49, 50, 51, 52, 53, 54, 55,
+    56, 57, 58, 59, 60, 61, 62, 63,
 };
 
 pub const SquareString = struct {
     pub const SquareToString = [_][:0]const u8{
         // zig fmt: off
-        "a8", "b8", "c8", "d8", "e8", "f8", "g8", "h8",
-        "a7", "b7", "c7", "d7", "e7", "f7", "g7", "h7",
-        "a6", "b6", "c6", "d6", "e6", "f6", "g6", "h6",
-        "a5", "b5", "c5", "d5", "e5", "f5", "g5", "h5",
-        "a4", "b4", "c4", "d4", "e4", "f4", "g4", "h4",
-        "a3", "b3", "c3", "d3", "e3", "f3", "g3", "h3",
-        "a2", "b2", "c2", "d2", "e2", "f2", "g2", "h2",
-        "a1", "b1", "c1", "d1", "e1", "f1", "g1", "h1",
+        "a1", "b1", "c1", "d1", "e1", "f1", "g1", "h1", 
+        "a2", "b2", "c2", "d2", "e2", "f2", "g2", "h2", 
+        "a3", "b3", "c3", "d3", "e3", "f3", "g3", "h3", 
+        "a4", "b4", "c4", "d4", "e4", "f4", "g4", "h4", 
+        "a5", "b5", "c5", "d5", "e5", "f5", "g5", "h5", 
+        "a6", "b6", "c6", "d6", "e6", "f6", "g6", "h6", 
+        "a7", "b7", "c7", "d7", "e7", "f7", "g7", "h7", 
+        "a8", "b8", "c8", "d8", "e8", "f8", "g8", "h8", 
         "None" 
         // zig fmt: on
     };
@@ -175,22 +175,40 @@ pub const Board = struct {
         b.castle = 0;
         return b;
     }
-
-    pub inline fn set_pieces(self: *Board, comptime c: Color) Bitboard {
-        return if (c == Color.White) self.pieces[Piece.WHITE_PAWN.toU4()] * 8 | self.pieces[Piece.WHITE_KNIGHT.toU4()] | self.pieces[Piece.WHITE_BISHOP.toU4()] | self.pieces[Piece.WHITE_QUEEN.toU4()] | self.pieces[Piece.WHITE_KING.toU4()] else
-            self.pieces[Piece.BLACK_PAWN.toU4()] * 8 | self.pieces[Piece.BLACK_KNIGHT.toU4()] | self.pieces[Piece.BLACK_BISHOP.toU4()] | self.pieces[Piece.BLACK_QUEEN.toU4()] | self.pieces[Piece.BLACK_KING.toU4()];
+pub inline fn set_pieces(self: *Board, comptime c: Color) Bitboard {
+        return if (c == Color.White) 
+            self.pieces[Piece.WHITE_PAWN.toU4()] | 
+            self.pieces[Piece.WHITE_KNIGHT.toU4()] | 
+            self.pieces[Piece.WHITE_BISHOP.toU4()] | 
+            self.pieces[Piece.WHITE_ROOK.toU4()] | 
+            self.pieces[Piece.WHITE_QUEEN.toU4()] | 
+            self.pieces[Piece.WHITE_KING.toU4()] 
+        else 
+            self.pieces[Piece.BLACK_PAWN.toU4()] | 
+            self.pieces[Piece.BLACK_KNIGHT.toU4()] | 
+            self.pieces[Piece.BLACK_BISHOP.toU4()] | 
+            self.pieces[Piece.BLACK_ROOK.toU4()] | 
+            self.pieces[Piece.BLACK_QUEEN.toU4()] | 
+            self.pieces[Piece.BLACK_KING.toU4()];
     }
 
     pub inline fn set_white(self: *Board) Bitboard {
-        return self.pieces[Piece.WHITE_PAWN.toU4()] * 8 | self.pieces[Piece.WHITE_KNIGHT.toU4()] | self.pieces[Piece.WHITE_BISHOP.toU4()] | self.pieces[Piece.WHITE_QUEEN.toU4()] | self.pieces[Piece.WHITE_KING.toU4()];
+        return self.pieces[Piece.WHITE_PAWN.toU4()] | 
+               self.pieces[Piece.WHITE_KNIGHT.toU4()] | 
+               self.pieces[Piece.WHITE_BISHOP.toU4()] | 
+               self.pieces[Piece.WHITE_ROOK.toU4()] | 
+               self.pieces[Piece.WHITE_QUEEN.toU4()] | 
+               self.pieces[Piece.WHITE_KING.toU4()];
     }
 
     pub inline fn set_black(self: *Board) Bitboard {
-        return self.pieces[Piece.BLACK_PAWN.toU4()] * 8 | self.pieces[Piece.BLACK_KNIGHT.toU4()] | self.pieces[Piece.BLACK_BISHOP.toU4()] | self.pieces[Piece.BLACK_QUEEN.toU4()] | self.pieces[Piece.BLACK_KING.toU4()];
-        self.pieces[Piece.BLACK_PAWN.toU4()] | self.pieces[Piece.BLACK_KNIGHT.toU4()] | self.pieces[Piece.BLACK_BISHOP.toU4()] | self.pieces[Piece.BLACK_QUEEN.toU4()] | self.pieces[Piece.BLACK_KING.toU4()];
-
+        return self.pieces[Piece.BLACK_PAWN.toU4()] | 
+               self.pieces[Piece.BLACK_KNIGHT.toU4()] | 
+               self.pieces[Piece.BLACK_BISHOP.toU4()] | 
+               self.pieces[Piece.BLACK_ROOK.toU4()] | 
+               self.pieces[Piece.BLACK_QUEEN.toU4()] | 
+               self.pieces[Piece.BLACK_KING.toU4()];
     }
-
 };
 
 // Attacking directions for the pieces

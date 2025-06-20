@@ -68,7 +68,7 @@ pub fn print_attacked_squares(board: *types.Board) void {
     for (0..8) |rank| {
         print("  {} ", .{8 - rank});
         for (0..8) |file| {
-            const square: u6 = @intCast(rank * 8 + file);
+            const square: u6 = @intCast((7 - rank) * 8 + file);
             const attacked = switch (side) {
                 .White => (attacks.pawn_attacks_from_square(square, .Black) & bbs[@intFromEnum(types.Piece.WHITE_PAWN)]) != 0 or
                     (attacks.piece_attacks(square, occ, types.PieceType.Knight) & bbs[@intFromEnum(types.Piece.WHITE_KNIGHT)]) != 0 or
@@ -158,7 +158,8 @@ pub fn print_attacked_squares_new(board: *types.Board) void {
     for (0..8) |rank| {
         print("  {} ", .{8 - rank});
         for (0..8) |file| {
-            const square: u6 = @intCast(rank * 8 + file);
+            const square: u6 = @intCast((7 - rank) * 8 + file);
+
             const attacked = is_square_attacked(board, square, board.side);
             const ch: u8 = if (attacked) 'X' else '.';
             print(" {c} ", .{ch});
@@ -218,7 +219,7 @@ pub fn fan_pars(fen: []const u8, board: *types.Board) !void {
             else => return FenError.InvalidFormat,
         };
         if (rank >= 8 or file >= 8) return FenError.InvalidPosition;
-        const sq_idx = rank * 8 + file;
+        const sq_idx = (7 - rank) * 8 + file;
         const piece_index: usize = @intCast(@intFromEnum(pe));
         board.pieces[piece_index] |= (@as(u64, 1) << @intCast(sq_idx));
         file += 1;

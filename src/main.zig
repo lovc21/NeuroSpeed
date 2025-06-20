@@ -20,13 +20,15 @@ pub fn main() !void {
     b.side = types.Color.White;
     bitboard.print_unicode_board(b);
 
-    var moves: lists.MoveList = .{};
-    move_gen.generate_moves(&b, &moves, types.Color.Black);
+    bitboard.print_attacked_squares(&b);
+    bitboard.print_attacked_squares_new(&b);
 
-    //print("{any}", .{moves});
+    var movesWhite: lists.MoveList = .{};
+    move_gen.generate_moves(&b, &movesWhite, types.Color.White);
 
-    for (0..moves.count) |i| {
-        const m = moves.moves[i];
+    print("White moves: \n", .{});
+    for (0..movesWhite.count) |i| {
+        const m = movesWhite.moves[i];
         // convert the raw u6 back into a square enum
         const from_sq: types.square = @enumFromInt(m.from);
         const to_sq: types.square = @enumFromInt(m.to);
@@ -38,6 +40,21 @@ pub fn main() !void {
         try stdout.print("{s}->{s} flags={any}\n", .{ from_str, to_str, m.flags });
     }
 
-    bitboard.print_attacked_squares(&b);
-    bitboard.print_attacked_squares_new(&b);
+    print("Black moves: \n", .{});
+
+    var movesBlack: lists.MoveList = .{};
+    move_gen.generate_moves(&b, &movesBlack, types.Color.Black);
+
+    for (0..movesBlack.count) |i| {
+        const m = movesBlack.moves[i];
+        // convert the raw u6 back into a square enum
+        const from_sq: types.square = @enumFromInt(m.from);
+        const to_sq: types.square = @enumFromInt(m.to);
+
+        const from_str = types.SquareString.getSquareToString(from_sq);
+        const to_str = types.SquareString.getSquareToString(to_sq);
+        // flags is just a small integer
+
+        try stdout.print("{s}->{s} flags={any}\n", .{ from_str, to_str, m.flags });
+    }
 }

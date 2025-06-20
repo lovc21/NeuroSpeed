@@ -30,14 +30,15 @@ pub fn generate_moves(board: *types.Board, list: *lists.MoveList, comptime color
         const from_idx = util.lsb_index(b);
         const from: u6 = @intCast(from_idx);
         b &= b - 1;
-        const from_bb = types.squar_bb_rotated[from];
+        const from_bb = types.squar_bb[from]; // Use squar_bb instead of squar_bb_rotated
 
-        // single push
-        const dir: u64 = if (us == types.Color.White) from_bb << 32 else from_bb >> 32;
+        // single push - move one rank forward
+        const dir: u64 = if (us == types.Color.White) from_bb << 8 else from_bb >> 8;
         if ((dir & occ) == 0) {
             const to_idx = util.lsb_index(dir);
             const to: u6 = @intCast(to_idx);
-            // promotion rank
+
+            // promotion rank check
             if ((dir & types.mask_rank[if (us == types.Color.White) 7 else 0]) != 0) {
                 list.append(Move.new(from, to, types.MoveFlags.PR_QUEEN));
                 list.append(Move.new(from, to, types.MoveFlags.PR_ROOK));
@@ -45,10 +46,11 @@ pub fn generate_moves(board: *types.Board, list: *lists.MoveList, comptime color
                 list.append(Move.new(from, to, types.MoveFlags.PR_KNIGHT));
             } else {
                 list.append(Move.new(from, to, types.MoveFlags.QUIET));
-                // double push
+
+                // double push - move two ranks forward from starting position
                 const start_mask = types.mask_rank[if (us == types.Color.White) 1 else 6];
                 if ((from_bb & start_mask) != 0) {
-                    const dir2 = if (us == types.Color.White) from_bb << 24 else from_bb >> 24;
+                    const dir2 = if (us == types.Color.White) from_bb << 16 else from_bb >> 16;
                     if ((dir2 & occ) == 0) {
                         const to2: u6 = @intCast(util.lsb_index(dir2));
                         list.append(Move.new(from, to2, types.MoveFlags.DOUBLE_PUSH));
@@ -56,6 +58,7 @@ pub fn generate_moves(board: *types.Board, list: *lists.MoveList, comptime color
                 }
             }
         }
+
         // captures & promotions
         const cap_bb = attacks.pawn_attacks_from_square(from, us) & them_bb;
         var c: u64 = cap_bb;
@@ -63,7 +66,9 @@ pub fn generate_moves(board: *types.Board, list: *lists.MoveList, comptime color
             const to_idx = util.lsb_index(c);
             const to: u6 = @intCast(to_idx);
             c &= c - 1;
-            if ((types.squar_bb_rotated[to] & types.mask_rank[if (us == types.Color.White) 6 else 1]) != 0) {
+
+            // promotion rank check for captures
+            if ((types.squar_bb[to] & types.mask_rank[if (us == types.Color.White) 7 else 0]) != 0) {
                 list.append(Move.new(from, to, types.MoveFlags.PC_QUEEN));
                 list.append(Move.new(from, to, types.MoveFlags.PC_ROOK));
                 list.append(Move.new(from, to, types.MoveFlags.PC_BISHOP));
@@ -77,7 +82,7 @@ pub fn generate_moves(board: *types.Board, list: *lists.MoveList, comptime color
         if (board.enpassant != types.square.NO_SQUARE) {
             const ep_sq: u6 = @intCast(@intFromEnum(board.enpassant));
             const ep_bb = types.squar_bb[ep_sq];
-            if ((attacks.pawn_attacks_from_bitboard(us, from_bb) & ep_bb) != 0) {
+            if ((attacks.pawn_attacks_from_square(from, us) & ep_bb) != 0) {
                 list.append(Move.new(from, ep_sq, types.MoveFlags.EN_PASSANT));
             }
         }
