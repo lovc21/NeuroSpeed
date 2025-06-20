@@ -355,10 +355,11 @@ test "test fen parsing" {
         print("  occupancy: expected=0x{x}, actual=0x{x}\n", .{ expected.occupancy, b.pieces_combined() });
         print("  en-passant: expected={s}, actual={s}\n", .{ expected.ep_str, if (b.enpassant == types.square.NO_SQUARE) "-" else types.SquareString.getSquareToString(b.enpassant) });
         print("  castling   : expected=0b{b:0>4}, actual=0b{b:0>4}\n\n", .{ expected.castle, b.castle });
+        const flipped_occupancy: types.Bitboard = util.flip_bitboard_vertically(b.pieces_combined());
 
         try std.testing.expectEqual(
             expected.occupancy,
-            b.pieces_combined(),
+            flipped_occupancy,
         );
 
         const actual_ep = if (b.enpassant == types.square.NO_SQUARE)
@@ -388,7 +389,7 @@ test "is square attacked" {
 
     const test_vectors = [_]AttackTestVector{
         .{ .fen = "8/8/8/8/8/8/8/8 w - - ", .white_attacks = 0x0000000000000000, .black_attacks = 0x0000000000000000 },
-        .{ .fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", .white_attacks = 9151313343305220096, .black_attacks = 16777086 },
+        .{ .fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", .white_attacks = 0x0000000000ffff7e, .black_attacks = 0x7effff0000000000 },
     };
 
     for (test_vectors) |vector| {

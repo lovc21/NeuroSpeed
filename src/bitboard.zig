@@ -10,7 +10,7 @@ pub fn print_board(bitboard: types.Bitboard) void {
     for (0..8) |rank| {
         print("  {} ", .{8 - rank});
         for (0..8) |file| {
-            const square = rank * 8 + file;
+            const square = (7 - rank) * 8 + file;
             const bit_on_board: u64 = if (util.get_bit(bitboard, square)) 1 else 0;
             print(" {d}", .{(bit_on_board)});
         }
@@ -27,7 +27,8 @@ pub fn print_unicode_board(board: types.Board) void {
     for (0..8) |rank| {
         print("  {} ", .{8 - rank});
         for (0..8) |file| {
-            const square = rank * 8 + file;
+            const square = (7 - rank) * 8 + file;
+
             var printed = false;
 
             for (0..types.Board.PieceCount) |i| {
@@ -105,20 +106,15 @@ pub fn is_square_attacked(
 
     return switch (by_side) {
         .White => {
-            // Pawns (reverse attack to find attacker)
             if ((attacks.pawn_attacks_from_square(square, .Black) &
                 bbs[@intFromEnum(types.Piece.WHITE_PAWN)]) != 0) return true;
-            // Knights
             if ((attacks.piece_attacks(square, occ, .Knight) &
                 bbs[@intFromEnum(types.Piece.WHITE_KNIGHT)]) != 0) return true;
-            // King
             if ((attacks.piece_attacks(square, occ, .King) &
                 bbs[@intFromEnum(types.Piece.WHITE_KING)]) != 0) return true;
-            // Bishops & Queens (diagonal)
             if ((attacks.piece_attacks(square, occ, .Bishop) &
                 (bbs[@intFromEnum(types.Piece.WHITE_BISHOP)] |
                     bbs[@intFromEnum(types.Piece.WHITE_QUEEN)])) != 0) return true;
-            // Rooks & Queens (orthogonal)
             if ((attacks.piece_attacks(square, occ, .Rook) &
                 (bbs[@intFromEnum(types.Piece.WHITE_ROOK)] |
                     bbs[@intFromEnum(types.Piece.WHITE_QUEEN)])) != 0) return true;
@@ -126,20 +122,15 @@ pub fn is_square_attacked(
             return false;
         },
         .Black => {
-            // Pawns (reverse attack to find attacker)
             if ((attacks.pawn_attacks_from_square(square, .White) &
                 bbs[@intFromEnum(types.Piece.BLACK_PAWN)]) != 0) return true;
-            // Knights
             if ((attacks.piece_attacks(square, occ, .Knight) &
                 bbs[@intFromEnum(types.Piece.BLACK_KNIGHT)]) != 0) return true;
-            // King
             if ((attacks.piece_attacks(square, occ, .King) &
                 bbs[@intFromEnum(types.Piece.BLACK_KING)]) != 0) return true;
-            // Bishops & Queens (diagonal)
             if ((attacks.piece_attacks(square, occ, .Bishop) &
                 (bbs[@intFromEnum(types.Piece.BLACK_BISHOP)] |
                     bbs[@intFromEnum(types.Piece.BLACK_QUEEN)])) != 0) return true;
-            // Rooks & Queens (orthogonal)
             if ((attacks.piece_attacks(square, occ, .Rook) &
                 (bbs[@intFromEnum(types.Piece.BLACK_ROOK)] |
                     bbs[@intFromEnum(types.Piece.BLACK_QUEEN)])) != 0) return true;
@@ -150,7 +141,6 @@ pub fn is_square_attacked(
     };
 }
 
-// This function is now much cleaner and uses the new is_square_attacked function.
 pub fn print_attacked_squares_new(board: *types.Board) void {
     print("\n", .{});
     print("--- Attacked squares for side: {} ---\n", .{board.side});

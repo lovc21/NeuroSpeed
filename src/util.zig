@@ -40,3 +40,8 @@ pub const PRNG = struct {
         return x *% 0x2545F4914F6CDD1D;
     }
 };
+
+// flip bitboard vertically (rank 1 <-> rank 8)
+pub fn flip_bitboard_vertically(bb: u64) u64 {
+    return @byteSwap(bb);
+}
