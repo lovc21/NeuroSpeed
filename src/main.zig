@@ -12,7 +12,7 @@ pub fn main() !void {
     attacks.init_attacks();
 
     var b = types.Board.new();
-    try bitboard.fan_pars(types.start_position, &b);
+    try bitboard.fan_pars(types.tricky_position, &b);
 
     const bb = b.pieces_combined();
     print("Occupancy (hex): 0x{x}\n", .{bb});
@@ -47,13 +47,11 @@ pub fn main() !void {
 
     for (0..movesBlack.count) |i| {
         const m = movesBlack.moves[i];
-        // convert the raw u6 back into a square enum
         const from_sq: types.square = @enumFromInt(m.from);
         const to_sq: types.square = @enumFromInt(m.to);
 
         const from_str = types.SquareString.getSquareToString(from_sq);
         const to_str = types.SquareString.getSquareToString(to_sq);
-        // flags is just a small integer
 
         try stdout.print("{s}->{s} flags={any}\n", .{ from_str, to_str, m.flags });
     }
