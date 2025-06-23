@@ -150,6 +150,29 @@ pub const Castle = enum(u8) {
     BQ = 8,
 };
 
+pub const BoardState = struct {
+    pieces: [Board.PieceCount]Bitboard,
+    side: Color,
+    enpassant: square,
+    castle: u8,
+
+    pub fn save(board: *const Board) BoardState {
+        return BoardState{
+            .pieces = board.pieces,
+            .side = board.side,
+            .enpassant = board.enpassant,
+            .castle = board.castle,
+        };
+    }
+
+    pub fn restore(self: BoardState, board: *Board) void {
+        board.pieces = self.pieces;
+        board.side = self.side;
+        board.enpassant = self.enpassant;
+        board.castle = self.castle;
+    }
+};
+
 pub const Board = struct {
     pub const PieceCount = @intFromEnum(Piece.NO_PIECE) + 1;
 
@@ -175,7 +198,8 @@ pub const Board = struct {
         b.castle = 0;
         return b;
     }
-pub inline fn set_pieces(self: *Board, comptime c: Color) Bitboard {
+
+    pub inline fn set_pieces(self: *Board, comptime c: Color) Bitboard {
         return if (c == Color.White) 
             self.pieces[Piece.WHITE_PAWN.toU4()] | 
             self.pieces[Piece.WHITE_KNIGHT.toU4()] | 
@@ -208,6 +232,14 @@ pub inline fn set_pieces(self: *Board, comptime c: Color) Bitboard {
                self.pieces[Piece.BLACK_ROOK.toU4()] | 
                self.pieces[Piece.BLACK_QUEEN.toU4()] | 
                self.pieces[Piece.BLACK_KING.toU4()];
+    }
+
+    pub fn save_state(self: *const Board) BoardState {
+        return BoardState.save(self);
+    }
+
+    pub fn restore_state(self: *Board, state: BoardState) void {
+        state.restore(self);
     }
 };
 

@@ -27,32 +27,13 @@ pub fn main() !void {
     move_gen.generate_moves(&b, &movesWhite, types.Color.White);
 
     print("White moves: \n", .{});
-    for (0..movesWhite.count) |i| {
-        const m = movesWhite.moves[i];
-        // convert the raw u6 back into a square enum
-        const from_sq: types.square = @enumFromInt(m.from);
-        const to_sq: types.square = @enumFromInt(m.to);
 
-        const from_str = types.SquareString.getSquareToString(from_sq);
-        const to_str = types.SquareString.getSquareToString(to_sq);
-        // flags is just a small integer
-
-        try stdout.print("{s}->{s} flags={any}\n", .{ from_str, to_str, m.flags });
-    }
-
+    move_gen.Print_move_list.print_list(&movesWhite);
+    move_gen.Print_move_list.print_move_list_descriptive(&b, &movesWhite, "White");
     print("Black moves: \n", .{});
 
     var movesBlack: lists.MoveList = .{};
     move_gen.generate_moves(&b, &movesBlack, types.Color.Black);
-
-    for (0..movesBlack.count) |i| {
-        const m = movesBlack.moves[i];
-        const from_sq: types.square = @enumFromInt(m.from);
-        const to_sq: types.square = @enumFromInt(m.to);
-
-        const from_str = types.SquareString.getSquareToString(from_sq);
-        const to_str = types.SquareString.getSquareToString(to_sq);
-
-        try stdout.print("{s}->{s} flags={any}\n", .{ from_str, to_str, m.flags });
-    }
+    move_gen.Print_move_list.print_list(&movesBlack);
+    move_gen.Print_move_list.print_move_list_descriptive(&b, &movesBlack, "Black");
 }

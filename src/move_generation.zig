@@ -4,6 +4,167 @@ const attacks = @import("attacks.zig");
 const lists = @import("lists.zig");
 const util = @import("util.zig");
 const bitboard = @import("bitboard.zig");
+const print = std.debug.print;
+
+pub const Print_move_list = struct {
+    pub inline fn is_capture(move: Move) bool {
+        return switch (move.flags) {
+            types.MoveFlags.CAPTURE, types.MoveFlags.EN_PASSANT, types.MoveFlags.PC_QUEEN, types.MoveFlags.PC_ROOK, types.MoveFlags.PC_BISHOP, types.MoveFlags.PC_KNIGHT => true,
+            else => false,
+        };
+    }
+
+    pub inline fn is_promotion(move: Move) bool {
+        return switch (move.flags) {
+            types.MoveFlags.PR_QUEEN, types.MoveFlags.PR_ROOK, types.MoveFlags.PR_BISHOP, types.MoveFlags.PR_KNIGHT, types.MoveFlags.PC_QUEEN, types.MoveFlags.PC_ROOK, types.MoveFlags.PC_BISHOP, types.MoveFlags.PC_KNIGHT => true,
+            else => false,
+        };
+    }
+    pub inline fn is_double_push(move: Move) bool {
+        return move.flags == types.MoveFlags.DOUBLE_PUSH;
+    }
+
+    pub inline fn is_en_passant(move: Move) bool {
+        return move.flags == types.MoveFlags.EN_PASSANT;
+    }
+
+    pub inline fn is_castling(move: Move) bool {
+        return move.flags == types.MoveFlags.OO or move.flags == types.MoveFlags.OOO;
+    }
+
+    pub inline fn get_promotion_char(move: Move) u8 {
+        return switch (move.flags) {
+            types.MoveFlags.PR_QUEEN, types.MoveFlags.PC_QUEEN => 'q',
+            types.MoveFlags.PR_ROOK, types.MoveFlags.PC_ROOK => 'r',
+            types.MoveFlags.PR_BISHOP, types.MoveFlags.PC_BISHOP => 'b',
+            types.MoveFlags.PR_KNIGHT, types.MoveFlags.PC_KNIGHT => 'n',
+            else => ' ',
+        };
+    }
+
+    pub fn print_list(move_list: *lists.MoveList) void {
+        // Handle empty move list
+        if (move_list.count == 0) {
+            print("\n     No moves in the move list!\n", .{});
+            return;
+        }
+
+        print("\n     move      capture   double    enpass    castling  promotion\n\n", .{});
+
+        for (0..move_list.count) |i| {
+            const move = move_list.moves[i];
+            const from_sq: types.square = @enumFromInt(move.from);
+            const to_sq: types.square = @enumFromInt(move.to);
+            const from_str = types.SquareString.getSquareToString(from_sq);
+            const to_str = types.SquareString.getSquareToString(to_sq);
+
+            const promotion_char = if (is_promotion(move)) get_promotion_char(move) else ' ';
+
+            print("     {s}{s}{c}      {d}         {d}         {d}         {d}         {c}\n", .{
+                from_str,
+                to_str,
+                promotion_char,
+                if (is_capture(move)) @as(u8, 1) else @as(u8, 0),
+                if (is_double_push(move)) @as(u8, 1) else @as(u8, 0),
+                if (is_en_passant(move)) @as(u8, 1) else @as(u8, 0),
+                if (is_castling(move)) @as(u8, 1) else @as(u8, 0),
+                promotion_char,
+            });
+        }
+
+        print("\n\n     Total number of moves: {d}\n\n", .{move_list.count});
+    }
+
+    fn print_move_description(board: *types.Board, move: Move) void {
+        const from_sq: types.square = @enumFromInt(move.from);
+        const to_sq: types.square = @enumFromInt(move.to);
+        const from_str = types.SquareString.getSquareToString(from_sq);
+        const to_str = types.SquareString.getSquareToString(to_sq);
+
+        // Get the piece at the from square
+        const piece = board.pieces;
+        var piece_name: []const u8 = "unknown";
+        var piece_found = false;
+
+        // Find which piece is at the from square
+        if (util.get_bit(piece[@intFromEnum(types.Piece.WHITE_PAWN)], move.from) or
+            util.get_bit(piece[@intFromEnum(types.Piece.BLACK_PAWN)], move.from))
+        {
+            piece_name = "pawn";
+            piece_found = true;
+        } else if (util.get_bit(piece[@intFromEnum(types.Piece.WHITE_KNIGHT)], move.from) or
+            util.get_bit(piece[@intFromEnum(types.Piece.BLACK_KNIGHT)], move.from))
+        {
+            piece_name = "knight";
+            piece_found = true;
+        } else if (util.get_bit(piece[@intFromEnum(types.Piece.WHITE_BISHOP)], move.from) or
+            util.get_bit(piece[@intFromEnum(types.Piece.BLACK_BISHOP)], move.from))
+        {
+            piece_name = "bishop";
+            piece_found = true;
+        } else if (util.get_bit(piece[@intFromEnum(types.Piece.WHITE_ROOK)], move.from) or
+            util.get_bit(piece[@intFromEnum(types.Piece.BLACK_ROOK)], move.from))
+        {
+            piece_name = "rook";
+            piece_found = true;
+        } else if (util.get_bit(piece[@intFromEnum(types.Piece.WHITE_QUEEN)], move.from) or
+            util.get_bit(piece[@intFromEnum(types.Piece.BLACK_QUEEN)], move.from))
+        {
+            piece_name = "queen";
+            piece_found = true;
+        } else if (util.get_bit(piece[@intFromEnum(types.Piece.WHITE_KING)], move.from) or
+            util.get_bit(piece[@intFromEnum(types.Piece.BLACK_KING)], move.from))
+        {
+            piece_name = "king";
+            piece_found = true;
+        }
+
+        if (!piece_found) {
+            print("{s} at {s} -> {s} (unknown piece)\n", .{ piece_name, from_str, to_str });
+            return;
+        }
+
+        // Describe the action
+        const action = switch (move.flags) {
+            types.MoveFlags.QUIET => "can move to",
+            types.MoveFlags.DOUBLE_PUSH => "can double push to",
+            types.MoveFlags.CAPTURE => "can capture at",
+            types.MoveFlags.EN_PASSANT => "can capture en passant at",
+            types.MoveFlags.OO => "can castle kingside",
+            types.MoveFlags.OOO => "can castle queenside",
+            types.MoveFlags.PR_QUEEN => "can push and promote to queen at",
+            types.MoveFlags.PR_ROOK => "can push and promote to rook at",
+            types.MoveFlags.PR_BISHOP => "can push and promote to bishop at",
+            types.MoveFlags.PR_KNIGHT => "can push and promote to knight at",
+            types.MoveFlags.PC_QUEEN => "can capture and promote to queen at",
+            types.MoveFlags.PC_ROOK => "can capture and promote to rook at",
+            types.MoveFlags.PC_BISHOP => "can capture and promote to bishop at",
+            types.MoveFlags.PC_KNIGHT => "can capture and promote to knight at",
+            else => "can make unknown move to",
+        };
+
+        if (move.flags == types.MoveFlags.OO or move.flags == types.MoveFlags.OOO) {
+            print("{s} at {s} {s}\n", .{ piece_name, from_str, action });
+        } else {
+            print("{s} at {s} {s} {s}\n", .{ piece_name, from_str, action, to_str });
+        }
+    }
+
+    pub fn print_move_list_descriptive(board: *types.Board, move_list: *lists.MoveList, color_name: []const u8) void {
+        if (move_list.count == 0) {
+            print("\n{s} has no legal moves!\n\n", .{color_name});
+            return;
+        }
+
+        print("\n=== {s} Moves ===\n", .{color_name});
+        for (0..move_list.count) |i| {
+            const move = move_list.moves[i];
+            print("{d:2}. ", .{i + 1});
+            print_move_description(board, move);
+        }
+        print("\nTotal: {d} moves\n\n", .{move_list.count});
+    }
+};
 
 pub const Move = struct {
     from: u6,
@@ -274,3 +435,6 @@ pub fn generate_moves(board: *types.Board, list: *lists.MoveList, comptime color
         }
     }
 }
+
+// make move on chess Board
+// pub fn make_move(board: *types.Board, move: Move) void {}
