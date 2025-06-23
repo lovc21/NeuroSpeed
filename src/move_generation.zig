@@ -23,15 +23,15 @@ pub fn generate_moves(board: *types.Board, list: *lists.MoveList, comptime color
     const them_bb: u64 = board.set_pieces(them);
     const occ = us_bb | them_bb;
 
+    // Pawn moves (existing code)
     const pawn_piece = if (us == types.Color.White) types.Piece.WHITE_PAWN else types.Piece.BLACK_PAWN;
     var b: u64 = board.pieces[@intFromEnum(pawn_piece)];
 
-    // Pawn moves
     while (b != 0) {
         const from_idx = util.lsb_index(b);
         const from: u6 = @intCast(from_idx);
         b &= b - 1;
-        const from_bb = types.squar_bb[from]; // Use squar_bb instead of squar_bb_rotated
+        const from_bb = types.squar_bb[from];
 
         // single push
         const dir: u64 = if (us == types.Color.White) from_bb << 8 else from_bb >> 8;
@@ -190,6 +190,32 @@ pub fn generate_moves(board: *types.Board, list: *lists.MoveList, comptime color
 
         // Captures
         var capture_targets = queen_attacks_bb & them_bb;
+        while (capture_targets != 0) {
+            const to: u6 = @intCast(util.lsb_index(capture_targets));
+            list.append(Move.new(from, to, types.MoveFlags.CAPTURE));
+            capture_targets &= capture_targets - 1;
+        }
+    }
+
+    // King moves
+    const king_piece = if (us == types.Color.White) types.Piece.WHITE_KING else types.Piece.BLACK_KING;
+    b = board.pieces[@intFromEnum(king_piece)];
+    if (b != 0) {
+        const from_idx = util.lsb_index(b);
+        const from: u6 = @intCast(from_idx);
+
+        const king_attacks_bb = attacks.piece_attacks(from, occ, types.PieceType.King);
+
+        // Quiet moves
+        var quiet_targets = king_attacks_bb & ~occ;
+        while (quiet_targets != 0) {
+            const to: u6 = @intCast(util.lsb_index(quiet_targets));
+            list.append(Move.new(from, to, types.MoveFlags.QUIET));
+            quiet_targets &= quiet_targets - 1;
+        }
+
+        // Captures
+        var capture_targets = king_attacks_bb & them_bb;
         while (capture_targets != 0) {
             const to: u6 = @intCast(util.lsb_index(capture_targets));
             list.append(Move.new(from, to, types.MoveFlags.CAPTURE));
