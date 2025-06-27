@@ -150,6 +150,19 @@ pub const Castle = enum(u8) {
     BQ = 8,
 };
 
+pub const casteling_rights: Bitboard = 0x9100000000000091;
+
+pub const white_castelingOO: Bitboard = 0x90;
+pub const white_castelingOOO: Bitboard = 0x90;
+pub const black_castelingOO: Bitboard = 0x9000000000000000;
+pub const black_castelingOOO: Bitboard = 0x1100000000000000;
+
+
+pub const white_casteling_betweenOO: Bitboard = 0x60;
+pub const white_casteling_betweenOOO: Bitboard = 0xe;
+pub const black_casteling_betweenOO: Bitboard = 0x6000000000000000;
+pub const black_casteling_betweenOOO: Bitboard = 0xe00000000000000;
+
 pub const BoardState = struct {
     pieces: [Board.PieceCount]Bitboard,
     side: Color,
@@ -181,6 +194,24 @@ pub const Board = struct {
     side: Color,
     enpassant: square,
     castle: u8, // bitmask of Castle.*
+    
+    pub fn white_pieces(self: *const Board) Bitboard {
+        return self.pieces[Piece.WHITE_PAWN.toU4()] | 
+               self.pieces[Piece.WHITE_KNIGHT.toU4()] | 
+               self.pieces[Piece.WHITE_BISHOP.toU4()] | 
+               self.pieces[Piece.WHITE_ROOK.toU4()] | 
+               self.pieces[Piece.WHITE_QUEEN.toU4()] | 
+               self.pieces[Piece.WHITE_KING.toU4()];
+    }
+    
+    pub fn black_pieces(self: *const Board) Bitboard {
+        return self.pieces[Piece.BLACK_PAWN.toU4()] | 
+               self.pieces[Piece.BLACK_KNIGHT.toU4()] | 
+               self.pieces[Piece.BLACK_BISHOP.toU4()] | 
+               self.pieces[Piece.BLACK_ROOK.toU4()] | 
+               self.pieces[Piece.BLACK_QUEEN.toU4()] | 
+               self.pieces[Piece.BLACK_KING.toU4()];
+    }
 
     pub fn pieces_combined(self: *const Board) Bitboard {
         var bb: Bitboard = 0;

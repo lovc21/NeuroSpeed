@@ -436,5 +436,205 @@ pub fn generate_moves(board: *types.Board, list: *lists.MoveList, comptime color
     }
 }
 
-// make move on chess Board
-// pub fn make_move(board: *types.Board, move: Move) void {}
+// Update castling rights using bitboard masks
+inline fn update_castling_rights(board: *types.Board, source_square: u6, target_square: u6) void {
+    const source_bb = types.squar_bb[source_square];
+    const target_bb = types.squar_bb[target_square];
+
+    // Check if any critical castling squares were touched
+    if ((source_bb | target_bb) & types.casteling_rights != 0) {
+        // White king moved from e1
+        if (source_square == @intFromEnum(types.square.e1)) {
+            board.castle &= ~(@intFromEnum(types.Castle.WK) | @intFromEnum(types.Castle.WQ));
+        }
+        // Black king moved from e8
+        else if (source_square == @intFromEnum(types.square.e8)) {
+            board.castle &= ~(@intFromEnum(types.Castle.BK) | @intFromEnum(types.Castle.BQ));
+        }
+
+        // White rook moves or captures
+        if (source_square == @intFromEnum(types.square.a1) or target_square == @intFromEnum(types.square.a1)) {
+            board.castle &= ~@intFromEnum(types.Castle.WQ);
+        }
+        if (source_square == @intFromEnum(types.square.h1) or target_square == @intFromEnum(types.square.h1)) {
+            board.castle &= ~@intFromEnum(types.Castle.WK);
+        }
+
+        // Black rook moves or captures
+        if (source_square == @intFromEnum(types.square.a8) or target_square == @intFromEnum(types.square.a8)) {
+            board.castle &= ~@intFromEnum(types.Castle.BQ);
+        }
+        if (source_square == @intFromEnum(types.square.h8) or target_square == @intFromEnum(types.square.h8)) {
+            board.castle &= ~@intFromEnum(types.Castle.BK);
+        }
+    }
+}
+
+// Helper function to handle castling rook movement
+inline fn handle_castling(board: *types.Board, target_square: u6, side: types.Color) void {
+    const rook_piece = if (side == types.Color.White) types.Piece.WHITE_ROOK else types.Piece.BLACK_ROOK;
+
+    switch (target_square) {
+        // White kingside castling
+        @intFromEnum(types.square.g1) => {
+            board.pieces[@intFromEnum(rook_piece)] = util.clear_bit(board.pieces[@intFromEnum(rook_piece)], types.square.h1);
+            board.pieces[@intFromEnum(rook_piece)] = util.set_bit(board.pieces[@intFromEnum(rook_piece)], types.square.f1);
+        },
+        // White queenside castling
+        @intFromEnum(types.square.c1) => {
+            board.pieces[@intFromEnum(rook_piece)] = util.clear_bit(board.pieces[@intFromEnum(rook_piece)], types.square.a1);
+            board.pieces[@intFromEnum(rook_piece)] = util.set_bit(board.pieces[@intFromEnum(rook_piece)], types.square.d1);
+        },
+        // Black kingside castling
+        @intFromEnum(types.square.g8) => {
+            board.pieces[@intFromEnum(rook_piece)] = util.clear_bit(board.pieces[@intFromEnum(rook_piece)], types.square.h8);
+            board.pieces[@intFromEnum(rook_piece)] = util.set_bit(board.pieces[@intFromEnum(rook_piece)], types.square.f8);
+        },
+        // Black queenside castling
+        @intFromEnum(types.square.c8) => {
+            board.pieces[@intFromEnum(rook_piece)] = util.clear_bit(board.pieces[@intFromEnum(rook_piece)], types.square.a8);
+            board.pieces[@intFromEnum(rook_piece)] = util.set_bit(board.pieces[@intFromEnum(rook_piece)], types.square.d8);
+        },
+        else => {},
+    }
+}
+
+inline fn is_capture_move(flags: types.MoveFlags) bool {
+    return switch (flags) {
+        types.MoveFlags.CAPTURE, types.MoveFlags.EN_PASSANT, types.MoveFlags.PC_QUEEN, types.MoveFlags.PC_ROOK, types.MoveFlags.PC_BISHOP, types.MoveFlags.PC_KNIGHT => true,
+        else => false,
+    };
+}
+
+inline fn is_promotion_move(flags: types.MoveFlags) bool {
+    return switch (flags) {
+        types.MoveFlags.PR_QUEEN, types.MoveFlags.PR_ROOK, types.MoveFlags.PR_BISHOP, types.MoveFlags.PR_KNIGHT, types.MoveFlags.PC_QUEEN, types.MoveFlags.PC_ROOK, types.MoveFlags.PC_BISHOP, types.MoveFlags.PC_KNIGHT => true,
+        else => false,
+    };
+}
+
+inline fn get_promoted_piece(flags: types.MoveFlags, side: types.Color) types.Piece {
+    return switch (flags) {
+        types.MoveFlags.PR_QUEEN, types.MoveFlags.PC_QUEEN => if (side == types.Color.White) types.Piece.WHITE_QUEEN else types.Piece.BLACK_QUEEN,
+        types.MoveFlags.PR_ROOK, types.MoveFlags.PC_ROOK => if (side == types.Color.White) types.Piece.WHITE_ROOK else types.Piece.BLACK_ROOK,
+        types.MoveFlags.PR_BISHOP, types.MoveFlags.PC_BISHOP => if (side == types.Color.White) types.Piece.WHITE_BISHOP else types.Piece.BLACK_BISHOP,
+        types.MoveFlags.PR_KNIGHT, types.MoveFlags.PC_KNIGHT => if (side == types.Color.White) types.Piece.WHITE_KNIGHT else types.Piece.BLACK_KNIGHT,
+        else => types.Piece.NO_PIECE,
+    };
+}
+
+pub fn make_move(board: *types.Board, move: Move) bool {
+    const saved_state = board.save_state();
+
+    const source_square = move.from;
+    const target_square = move.to;
+    const move_flags = move.flags;
+
+    // Find the piece to move
+    var piece_type: types.Piece = types.Piece.NO_PIECE;
+
+    for (0..6) |i| {
+        if (util.get_bit(board.pieces[i], source_square)) {
+            piece_type = @enumFromInt(i);
+            break;
+        }
+    }
+
+    // If not found in white pieces, check black pieces (indices 8-13)
+    if (piece_type == types.Piece.NO_PIECE) {
+        for (8..14) |i| {
+            if (util.get_bit(board.pieces[i], source_square)) {
+                piece_type = @enumFromInt(i);
+                break;
+            }
+        }
+    }
+
+    if (piece_type == types.Piece.NO_PIECE) return false;
+
+    // Move the piece
+    board.pieces[@intFromEnum(piece_type)] = util.clear_bit(board.pieces[@intFromEnum(piece_type)], @enumFromInt(source_square));
+    board.pieces[@intFromEnum(piece_type)] = util.set_bit(board.pieces[@intFromEnum(piece_type)], @enumFromInt(target_square));
+
+    // Handle captures
+    if (is_capture_move(move_flags)) {
+        if (move_flags != types.MoveFlags.EN_PASSANT) {
+            const them_pieces = if (board.side == types.Color.White)
+                [_]types.Piece{ types.Piece.BLACK_PAWN, types.Piece.BLACK_KNIGHT, types.Piece.BLACK_BISHOP, types.Piece.BLACK_ROOK, types.Piece.BLACK_QUEEN, types.Piece.BLACK_KING }
+            else
+                [_]types.Piece{ types.Piece.WHITE_PAWN, types.Piece.WHITE_KNIGHT, types.Piece.WHITE_BISHOP, types.Piece.WHITE_ROOK, types.Piece.WHITE_QUEEN, types.Piece.WHITE_KING };
+
+            for (them_pieces) |captured_piece| {
+                if (util.get_bit(board.pieces[@intFromEnum(captured_piece)], target_square)) {
+                    board.pieces[@intFromEnum(captured_piece)] = util.clear_bit(board.pieces[@intFromEnum(captured_piece)], @enumFromInt(target_square));
+                    break;
+                }
+            }
+        }
+    }
+
+    // Handle promotions
+    if (is_promotion_move(move_flags)) {
+        const pawn_piece = if (board.side == types.Color.White) types.Piece.WHITE_PAWN else types.Piece.BLACK_PAWN;
+        board.pieces[@intFromEnum(pawn_piece)] = util.clear_bit(board.pieces[@intFromEnum(pawn_piece)], @enumFromInt(target_square));
+
+        const promoted_piece = get_promoted_piece(move_flags, board.side);
+        board.pieces[@intFromEnum(promoted_piece)] = util.set_bit(board.pieces[@intFromEnum(promoted_piece)], @enumFromInt(target_square));
+    }
+
+    // Handle en passant capture
+    if (move_flags == types.MoveFlags.EN_PASSANT) {
+        const captured_pawn_square: u6 = if (board.side == types.Color.White)
+            target_square + 8
+        else
+            target_square - 8;
+
+        const captured_pawn = if (board.side == types.Color.White) types.Piece.BLACK_PAWN else types.Piece.WHITE_PAWN;
+        board.pieces[@intFromEnum(captured_pawn)] = util.clear_bit(board.pieces[@intFromEnum(captured_pawn)], @enumFromInt(captured_pawn_square));
+    }
+
+    // Reset en passant square
+    board.enpassant = types.square.NO_SQUARE;
+
+    // Handle double pawn push
+    if (move_flags == types.MoveFlags.DOUBLE_PUSH) {
+        board.enpassant = if (board.side == types.Color.White)
+            @enumFromInt(target_square + 8)
+        else
+            @enumFromInt(target_square - 8);
+    }
+
+    // Handle castling moves
+    if (move_flags == types.MoveFlags.OO or move_flags == types.MoveFlags.OOO) {
+        handle_castling(board, target_square, board.side);
+    }
+
+    // Update castling rights using bitboard masks
+    update_castling_rights(board, source_square, target_square);
+
+    // Change side to move
+    board.side = if (board.side == types.Color.White) types.Color.Black else types.Color.White;
+
+    // Check if move leaves king in check (illegal move)
+    const king_piece = if (board.side == types.Color.White) types.Piece.BLACK_KING else types.Piece.WHITE_KING;
+    const king_square: u6 = @intCast(util.lsb_index(board.pieces[@intFromEnum(king_piece)]));
+
+    if (bitboard.is_square_attacked(board, king_square, board.side)) {
+        // Restore board state - illegal move
+        board.restore_state(saved_state);
+        return false;
+    }
+
+    return true;
+}
+
+pub fn make_capture_only(board: *types.Board, move: Move) bool {
+    if (is_capture_move(move.flags)) {
+        return make_move(board, move);
+    }
+    return false;
+}
+
+pub fn try_make_move(board: *types.Board, move: Move) bool {
+    return make_move(board, move);
+}
