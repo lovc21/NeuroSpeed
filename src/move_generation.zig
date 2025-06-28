@@ -530,27 +530,23 @@ pub fn make_move(board: *types.Board, move: Move) bool {
     const target_square = move.to;
     const move_flags = move.flags;
 
-    // Find the piece to move
+    // Find the piece to move by checking what's actually at the source square
     var piece_type: types.Piece = types.Piece.NO_PIECE;
+    var moving_side: types.Color = undefined;
 
-    for (0..6) |i| {
+    // Check all pieces to find what's at the source square
+    for (0..types.Board.PieceCount) |i| {
+        if (i == @intFromEnum(types.Piece.NO_PIECE)) continue;
         if (util.get_bit(board.pieces[i], source_square)) {
             piece_type = @enumFromInt(i);
             break;
         }
     }
 
-    // If not found in white pieces, check black pieces (indices 8-13)
-    if (piece_type == types.Piece.NO_PIECE) {
-        for (8..14) |i| {
-            if (util.get_bit(board.pieces[i], source_square)) {
-                piece_type = @enumFromInt(i);
-                break;
-            }
-        }
-    }
-
     if (piece_type == types.Piece.NO_PIECE) return false;
+
+    // Determine the moving side based on the piece found
+    moving_side = if (@intFromEnum(piece_type) < 6) types.Color.White else types.Color.Black;
 
     // Move the piece
     board.pieces[@intFromEnum(piece_type)] = util.clear_bit(board.pieces[@intFromEnum(piece_type)], @enumFromInt(source_square));
@@ -559,14 +555,15 @@ pub fn make_move(board: *types.Board, move: Move) bool {
     // Handle captures
     if (is_capture_move(move_flags)) {
         if (move_flags != types.MoveFlags.EN_PASSANT) {
-            const them_pieces = if (board.side == types.Color.White)
-                [_]types.Piece{ types.Piece.BLACK_PAWN, types.Piece.BLACK_KNIGHT, types.Piece.BLACK_BISHOP, types.Piece.BLACK_ROOK, types.Piece.BLACK_QUEEN, types.Piece.BLACK_KING }
+            // Regular capture - find and remove the captured piece
+            const enemy_pieces = if (moving_side == types.Color.White)
+                [_]usize{ 8, 9, 10, 11, 12, 13 } // Black pieces
             else
-                [_]types.Piece{ types.Piece.WHITE_PAWN, types.Piece.WHITE_KNIGHT, types.Piece.WHITE_BISHOP, types.Piece.WHITE_ROOK, types.Piece.WHITE_QUEEN, types.Piece.WHITE_KING };
+                [_]usize{ 0, 1, 2, 3, 4, 5 }; // White pieces
 
-            for (them_pieces) |captured_piece| {
-                if (util.get_bit(board.pieces[@intFromEnum(captured_piece)], target_square)) {
-                    board.pieces[@intFromEnum(captured_piece)] = util.clear_bit(board.pieces[@intFromEnum(captured_piece)], @enumFromInt(target_square));
+            for (enemy_pieces) |captured_piece_idx| {
+                if (util.get_bit(board.pieces[captured_piece_idx], target_square)) {
+                    board.pieces[captured_piece_idx] = util.clear_bit(board.pieces[captured_piece_idx], @enumFromInt(target_square));
                     break;
                 }
             }
@@ -575,21 +572,21 @@ pub fn make_move(board: *types.Board, move: Move) bool {
 
     // Handle promotions
     if (is_promotion_move(move_flags)) {
-        const pawn_piece = if (board.side == types.Color.White) types.Piece.WHITE_PAWN else types.Piece.BLACK_PAWN;
+        const pawn_piece = if (moving_side == types.Color.White) types.Piece.WHITE_PAWN else types.Piece.BLACK_PAWN;
         board.pieces[@intFromEnum(pawn_piece)] = util.clear_bit(board.pieces[@intFromEnum(pawn_piece)], @enumFromInt(target_square));
 
-        const promoted_piece = get_promoted_piece(move_flags, board.side);
+        const promoted_piece = get_promoted_piece(move_flags, moving_side);
         board.pieces[@intFromEnum(promoted_piece)] = util.set_bit(board.pieces[@intFromEnum(promoted_piece)], @enumFromInt(target_square));
     }
 
     // Handle en passant capture
     if (move_flags == types.MoveFlags.EN_PASSANT) {
-        const captured_pawn_square: u6 = if (board.side == types.Color.White)
-            target_square + 8
+        const captured_pawn_square: u6 = if (moving_side == types.Color.White)
+            target_square - 8
         else
-            target_square - 8;
+            target_square + 8;
 
-        const captured_pawn = if (board.side == types.Color.White) types.Piece.BLACK_PAWN else types.Piece.WHITE_PAWN;
+        const captured_pawn = if (moving_side == types.Color.White) types.Piece.BLACK_PAWN else types.Piece.WHITE_PAWN;
         board.pieces[@intFromEnum(captured_pawn)] = util.clear_bit(board.pieces[@intFromEnum(captured_pawn)], @enumFromInt(captured_pawn_square));
     }
 
@@ -598,32 +595,33 @@ pub fn make_move(board: *types.Board, move: Move) bool {
 
     // Handle double pawn push
     if (move_flags == types.MoveFlags.DOUBLE_PUSH) {
-        board.enpassant = if (board.side == types.Color.White)
-            @enumFromInt(target_square + 8)
+        board.enpassant = if (moving_side == types.Color.White)
+            @enumFromInt(target_square - 8)
         else
-            @enumFromInt(target_square - 8);
+            @enumFromInt(target_square + 8);
     }
 
     // Handle castling moves
     if (move_flags == types.MoveFlags.OO or move_flags == types.MoveFlags.OOO) {
-        handle_castling(board, target_square, board.side);
+        handle_castling(board, target_square, moving_side);
     }
 
     // Update castling rights using bitboard masks
     update_castling_rights(board, source_square, target_square);
 
-    // Change side to move
-    board.side = if (board.side == types.Color.White) types.Color.Black else types.Color.White;
+    // Check if move leaves our king in check (illegal move)
+    const our_king_piece = if (moving_side == types.Color.White) types.Piece.WHITE_KING else types.Piece.BLACK_KING;
+    const our_king_square: u6 = @intCast(util.lsb_index(board.pieces[@intFromEnum(our_king_piece)]));
+    const opponent_side = if (moving_side == types.Color.White) types.Color.Black else types.Color.White;
 
-    // Check if move leaves king in check (illegal move)
-    const king_piece = if (board.side == types.Color.White) types.Piece.BLACK_KING else types.Piece.WHITE_KING;
-    const king_square: u6 = @intCast(util.lsb_index(board.pieces[@intFromEnum(king_piece)]));
-
-    if (bitboard.is_square_attacked(board, king_square, board.side)) {
+    if (bitboard.is_square_attacked(board, our_king_square, opponent_side)) {
         // Restore board state - illegal move
         board.restore_state(saved_state);
         return false;
     }
+
+    // Change side to move only after confirming the move is legal
+    board.side = if (board.side == types.Color.White) types.Color.Black else types.Color.White;
 
     return true;
 }

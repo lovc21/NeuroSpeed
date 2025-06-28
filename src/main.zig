@@ -11,12 +11,12 @@ pub fn main() !void {
     attacks.init_attacks();
 
     var b = types.Board.new();
-    try bitboard.fan_pars(types.start_position, &b);
+    try bitboard.fan_pars(types.tricky_position, &b);
 
     bitboard.print_unicode_board(b);
 
     var movesWhite: lists.MoveList = .{};
-    move_gen.generate_moves(&b, &movesWhite, types.Color.White);
+    move_gen.generate_moves(&b, &movesWhite, types.Color.Black);
 
     print("Number of moves: {d}\n\n", .{movesWhite.count});
 
