@@ -176,7 +176,7 @@ pub const Move = struct {
     }
 };
 
-pub fn generate_moves(board: *types.Board, list: *lists.MoveList, comptime color: types.Color) void {
+pub inline fn generate_moves(board: *types.Board, list: *lists.MoveList, comptime color: types.Color) void {
     const us = color;
     const them = if (us == types.Color.White) types.Color.Black else types.Color.White;
 
@@ -530,11 +530,10 @@ pub fn make_move(board: *types.Board, move: Move) bool {
     const target_square = move.to;
     const move_flags = move.flags;
 
-    // Find the piece to move by checking what's actually at the source square
     var piece_type: types.Piece = types.Piece.NO_PIECE;
     var moving_side: types.Color = undefined;
 
-    // Check all pieces to find what's at the source square
+    // Check all pieces
     for (0..types.Board.PieceCount) |i| {
         if (i == @intFromEnum(types.Piece.NO_PIECE)) continue;
         if (util.get_bit(board.pieces[i], source_square)) {
@@ -552,10 +551,9 @@ pub fn make_move(board: *types.Board, move: Move) bool {
     board.pieces[@intFromEnum(piece_type)] = util.clear_bit(board.pieces[@intFromEnum(piece_type)], @enumFromInt(source_square));
     board.pieces[@intFromEnum(piece_type)] = util.set_bit(board.pieces[@intFromEnum(piece_type)], @enumFromInt(target_square));
 
-    // Handle captures
+    // Regular capture - find and remove the captured piece
     if (is_capture_move(move_flags)) {
         if (move_flags != types.MoveFlags.EN_PASSANT) {
-            // Regular capture - find and remove the captured piece
             const enemy_pieces = if (moving_side == types.Color.White)
                 [_]usize{ 8, 9, 10, 11, 12, 13 } // Black pieces
             else

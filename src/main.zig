@@ -6,6 +6,7 @@ const util = @import("util.zig");
 const attacks = @import("attacks.zig");
 const lists = @import("lists.zig");
 const move_gen = @import("move_generation.zig");
+const uci = @import("uci.zig");
 
 pub fn main() !void {
     attacks.init_attacks();
@@ -15,22 +16,28 @@ pub fn main() !void {
 
     bitboard.print_unicode_board(b);
 
-    var movesWhite: lists.MoveList = .{};
-    move_gen.generate_moves(&b, &movesWhite, types.Color.Black);
+    // var movesWhite: lists.MoveList = .{};
+    // move_gen.generate_moves(&b, &movesWhite, types.Color.Black);
 
-    print("Number of moves: {d}\n\n", .{movesWhite.count});
+    // print("Number of moves: {d}\n\n", .{movesWhite.count});
+    //
+    // for (0..movesWhite.count) |i| {
+    //     const move = movesWhite.moves[i];
+    //     const original_state = b.save_state();
+    //
+    //     if (move_gen.make_move(&b, move)) {
+    //         print("Legal move made", .{});
+    //         bitboard.print_unicode_board(b);
+    //         bitboard.print_board(b.black_pieces());
+    //         b.restore_state(original_state);
+    //     } else {
+    //         print("Illegal move made", .{});
+    //     }
+    // }
+    //
 
-    for (0..movesWhite.count) |i| {
-        const move = movesWhite.moves[i];
-        const original_state = b.save_state();
-
-        if (move_gen.make_move(&b, move)) {
-            print("Legal move made", .{});
-            bitboard.print_unicode_board(b);
-            bitboard.print_board(b.black_pieces());
-            b.restore_state(original_state);
-        } else {
-            print("Illegal move made", .{});
-        }
-    }
+    //util.perft_test(&b, 5);
+    //
+    //util.perft_test_detailed(&b, 4);
+    util.perft_divide_detailed(&b, 4);
 }
