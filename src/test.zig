@@ -355,10 +355,11 @@ test "test fen parsing" {
         print("  occupancy: expected=0x{x}, actual=0x{x}\n", .{ expected.occupancy, b.pieces_combined() });
         print("  en-passant: expected={s}, actual={s}\n", .{ expected.ep_str, if (b.enpassant == types.square.NO_SQUARE) "-" else types.SquareString.getSquareToString(b.enpassant) });
         print("  castling   : expected=0b{b:0>4}, actual=0b{b:0>4}\n\n", .{ expected.castle, b.castle });
+        const flipped_occupancy: types.Bitboard = util.flip_bitboard_vertically(b.pieces_combined());
 
         try std.testing.expectEqual(
             expected.occupancy,
-            b.pieces_combined(),
+            flipped_occupancy,
         );
 
         const actual_ep = if (b.enpassant == types.square.NO_SQUARE)
@@ -388,7 +389,7 @@ test "is square attacked" {
 
     const test_vectors = [_]AttackTestVector{
         .{ .fen = "8/8/8/8/8/8/8/8 w - - ", .white_attacks = 0x0000000000000000, .black_attacks = 0x0000000000000000 },
-        .{ .fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", .white_attacks = 9151313343305220096, .black_attacks = 16777086 },
+        .{ .fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", .white_attacks = 0x0000000000ffff7e, .black_attacks = 0x7effff0000000000 },
     };
 
     for (test_vectors) |vector| {
@@ -427,4 +428,54 @@ test "is square attacked" {
         }
         try std.testing.expectEqual(vector.black_attacks, generated_black_attacks);
     }
+}
+
+test "Perft Test the move generation start position" {
+    attacks.init_attacks();
+    const depth: u8 = 5;
+
+    var b = types.Board.new();
+    try bitboard.fan_pars(types.start_position, &b);
+
+    const stats = if (b.side == types.Color.White)
+        util.perft_detailed(types.Color.White, &b, depth)
+    else
+        util.perft_detailed(types.Color.Black, &b, depth);
+
+    try std.testing.expectEqual(stats.nodes, 4865609);
+    try std.testing.expectEqual(stats.captures, 82719);
+    try std.testing.expectEqual(stats.promotions, 0);
+    try std.testing.expectEqual(stats.checks, 27351);
+    try std.testing.expectEqual(stats.en_passant, 258);
+    try std.testing.expectEqual(stats.castles, 0);
+    try std.testing.expectEqual(stats.double_checks, 0);
+    try std.testing.expectEqual(stats.checkmates, 347);
+
+    print("\n=== Testing FEN: {s}\n", .{types.start_position});
+    print("Perft test for the start position done\n", .{});
+}
+
+test "Perft Test the move generation tricky position" {
+    attacks.init_attacks();
+    const depth: u8 = 4;
+
+    var b = types.Board.new();
+    try bitboard.fan_pars(types.tricky_position, &b);
+
+    const stats = if (b.side == types.Color.White)
+        util.perft_detailed(types.Color.White, &b, depth)
+    else
+        util.perft_detailed(types.Color.Black, &b, depth);
+
+    try std.testing.expectEqual(stats.nodes, 4085603);
+    try std.testing.expectEqual(stats.captures, 757163);
+    try std.testing.expectEqual(stats.promotions, 15172);
+    try std.testing.expectEqual(stats.checks, 25523);
+    try std.testing.expectEqual(stats.en_passant, 1929);
+    try std.testing.expectEqual(stats.castles, 128013);
+    try std.testing.expectEqual(stats.double_checks, 6);
+    try std.testing.expectEqual(stats.checkmates, 43);
+
+    print("\n=== Testing FEN: {s}\n", .{types.tricky_position});
+    print("Perft test for the tricky position done\n", .{});
 }

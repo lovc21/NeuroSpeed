@@ -67,6 +67,7 @@ pub fn initialise_pseudo_legal() void {
     }
 }
 
+// use this for pawn attacks
 pub inline fn pawn_attacks_from_square(s: usize, c: types.Color) u64 {
     return pawn_attacks[@intFromEnum(c)][s];
 }
@@ -339,6 +340,7 @@ pub inline fn get_queen_attacks(square: u6, occ: u64) u64 {
     return queen_attacks;
 }
 
+// use this for all attacks except pawns
 pub fn piece_attacks(
     square: u6,
     occ: u64,
