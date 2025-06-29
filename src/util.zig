@@ -214,7 +214,7 @@ fn count_attackers_to_square(board: *types.Board, square: u6, by_side: types.Col
         count += popcount(knight_attacks & bbs[if (by_side == types.Color.White) @intFromEnum(types.Piece.WHITE_KNIGHT) else @intFromEnum(types.Piece.BLACK_KNIGHT)]);
     }
 
-    // Check bishops and queens (diagonal)
+    // Check bishops and queens
     const bishop_attacks_bb = attacks.piece_attacks(square, occ, types.PieceType.Bishop);
     const diag_pieces = if (by_side == types.Color.White)
         (bbs[@intFromEnum(types.Piece.WHITE_BISHOP)] | bbs[@intFromEnum(types.Piece.WHITE_QUEEN)])
@@ -360,45 +360,4 @@ pub fn perft_test_detailed(board: *types.Board, depth: u8) void {
         const nps = @as(f64, @floatFromInt(stats.nodes)) / elapsed_s;
         print("Nodes per second: {d:.0}\n", .{nps});
     }
-}
-
-pub fn perft_divide_detailed(board: *types.Board, depth: u8) void {
-    print("\n=== Perft Divide (Depth {d}) ===\n", .{depth});
-
-    const color = board.side;
-
-    const opponent_side = if (color == types.Color.White) types.Color.Black else types.Color.White;
-
-    var move_list: lists.MoveList = .{};
-
-    switch (color) {
-        types.Color.White => move_gen.generate_moves(board, &move_list, types.Color.White),
-        types.Color.Black => move_gen.generate_moves(board, &move_list, types.Color.Black),
-        else => {},
-    }
-    var total_nodes: u64 = 0;
-
-    for (0..move_list.count) |i| {
-        const move = move_list.moves[i];
-        const original_state = board.save_state();
-
-        if (move_gen.make_move(board, move)) {
-            const nodes = if (depth > 1)
-                perft_detailed(opponent_side, board, depth - 1).nodes
-            else
-                1;
-
-            total_nodes += nodes;
-
-            // Print move in algebraic notation
-            const from_str = types.SquareString.getSquareToString(@enumFromInt(move.from));
-            const to_str = types.SquareString.getSquareToString(@enumFromInt(move.to));
-            print("{s}{s}: {d}\n", .{ from_str, to_str, nodes });
-
-            board.restore_state(original_state);
-        }
-    }
-
-    print("\nTotal moves: {d}\n", .{move_list.count});
-    print("Total nodes: {d}\n", .{total_nodes});
 }

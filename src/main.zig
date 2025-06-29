@@ -12,7 +12,7 @@ pub fn main() !void {
     attacks.init_attacks();
 
     var b = types.Board.new();
-    try bitboard.fan_pars(types.tricky_position, &b);
+    try bitboard.fan_pars(types.start_position, &b);
 
     bitboard.print_unicode_board(b);
 
@@ -38,6 +38,5 @@ pub fn main() !void {
 
     //util.perft_test(&b, 5);
     //
-    //util.perft_test_detailed(&b, 4);
-    util.perft_divide_detailed(&b, 4);
+    util.perft_test_detailed(&b, 5);
 }

@@ -429,3 +429,53 @@ test "is square attacked" {
         try std.testing.expectEqual(vector.black_attacks, generated_black_attacks);
     }
 }
+
+test "Perft Test the move generation start position" {
+    attacks.init_attacks();
+    const depth: u8 = 5;
+
+    var b = types.Board.new();
+    try bitboard.fan_pars(types.start_position, &b);
+
+    const stats = if (b.side == types.Color.White)
+        util.perft_detailed(types.Color.White, &b, depth)
+    else
+        util.perft_detailed(types.Color.Black, &b, depth);
+
+    try std.testing.expectEqual(stats.nodes, 4865609);
+    try std.testing.expectEqual(stats.captures, 82719);
+    try std.testing.expectEqual(stats.promotions, 0);
+    try std.testing.expectEqual(stats.checks, 27351);
+    try std.testing.expectEqual(stats.en_passant, 258);
+    try std.testing.expectEqual(stats.castles, 0);
+    try std.testing.expectEqual(stats.double_checks, 0);
+    try std.testing.expectEqual(stats.checkmates, 347);
+
+    print("\n=== Testing FEN: {s}\n", .{types.start_position});
+    print("Perft test for the start position done\n", .{});
+}
+
+test "Perft Test the move generation tricky position" {
+    attacks.init_attacks();
+    const depth: u8 = 4;
+
+    var b = types.Board.new();
+    try bitboard.fan_pars(types.tricky_position, &b);
+
+    const stats = if (b.side == types.Color.White)
+        util.perft_detailed(types.Color.White, &b, depth)
+    else
+        util.perft_detailed(types.Color.Black, &b, depth);
+
+    try std.testing.expectEqual(stats.nodes, 4085603);
+    try std.testing.expectEqual(stats.captures, 757163);
+    try std.testing.expectEqual(stats.promotions, 15172);
+    try std.testing.expectEqual(stats.checks, 25523);
+    try std.testing.expectEqual(stats.en_passant, 1929);
+    try std.testing.expectEqual(stats.castles, 128013);
+    try std.testing.expectEqual(stats.double_checks, 6);
+    try std.testing.expectEqual(stats.checkmates, 43);
+
+    print("\n=== Testing FEN: {s}\n", .{types.tricky_position});
+    print("Perft test for the tricky position done\n", .{});
+}

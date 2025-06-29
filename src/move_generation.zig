@@ -6,6 +6,18 @@ const util = @import("util.zig");
 const bitboard = @import("bitboard.zig");
 const print = std.debug.print;
 
+// Define a move
+pub const Move = struct {
+    from: u6,
+    to: u6,
+    flags: types.MoveFlags,
+
+    pub inline fn new(from: u6, to: u6, flags: types.MoveFlags) Move {
+        return Move{ .from = from, .to = to, .flags = flags };
+    }
+};
+
+// Print move list
 pub const Print_move_list = struct {
     pub inline fn is_capture(move: Move) bool {
         return switch (move.flags) {
@@ -166,16 +178,7 @@ pub const Print_move_list = struct {
     }
 };
 
-pub const Move = struct {
-    from: u6,
-    to: u6,
-    flags: types.MoveFlags,
-
-    pub inline fn new(from: u6, to: u6, flags: types.MoveFlags) Move {
-        return Move{ .from = from, .to = to, .flags = flags };
-    }
-};
-
+// Move generation
 pub inline fn generate_moves(board: *types.Board, list: *lists.MoveList, comptime color: types.Color) void {
     const us = color;
     const them = if (us == types.Color.White) types.Color.Black else types.Color.White;
@@ -184,7 +187,7 @@ pub inline fn generate_moves(board: *types.Board, list: *lists.MoveList, comptim
     const them_bb: u64 = board.set_pieces(them);
     const occ = us_bb | them_bb;
 
-    // Pawn moves (existing code)
+    // Pawn moves
     const pawn_piece = if (us == types.Color.White) types.Piece.WHITE_PAWN else types.Piece.BLACK_PAWN;
     var b: u64 = board.pieces[@intFromEnum(pawn_piece)];
 
@@ -551,7 +554,7 @@ pub fn make_move(board: *types.Board, move: Move) bool {
     board.pieces[@intFromEnum(piece_type)] = util.clear_bit(board.pieces[@intFromEnum(piece_type)], @enumFromInt(source_square));
     board.pieces[@intFromEnum(piece_type)] = util.set_bit(board.pieces[@intFromEnum(piece_type)], @enumFromInt(target_square));
 
-    // Regular capture - find and remove the captured piece
+    // Regular capture
     if (is_capture_move(move_flags)) {
         if (move_flags != types.MoveFlags.EN_PASSANT) {
             const enemy_pieces = if (moving_side == types.Color.White)

@@ -1,0 +1,53 @@
+name: CI
+
+on: 
+  push:
+    branches:
+      - main
+
+
+jobs:
+
+  Perft:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        suites:
+        - name: Normal
+          epd: perftsuite.epd
+          count: 127
+          depth: 5
+        - name: FRC
+          epd: frc_perftsuite.epd
+          count: 1000
+          depth: 4
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: "0.14.0"
+
+      - name: Build engine
+        run: zig build
+
+      # - name: Perft ${{ matrix.suites.name }}
+      #   run: |
+      #     echo 0 > COUNTER.tmp
+      #     wget -O- https://raw.githubusercontent.com/TerjeKir/EngineTests/master/testfiles/${{ matrix.suites.epd }} | while read p; do
+      #       echo $(($(cat COUNTER.tmp) + 1)) > COUNTER.tmp
+      #       echo "$(cat COUNTER.tmp): $p"
+      #       expected=$(echo $p | grep -Po '(?<=;D'${{ matrix.suites.depth }}' )[0-9]+?(?= )')
+      #       actual=$(echo "perft ${{ matrix.suites.depth }} $p" | ./zig-out/bin/your-engine-name | grep -Po '(?<=Nodes: )[0-9]+?(?=$)')
+      #       if [[ $actual != $expected ]]; then 
+      #         echo "Expected $expected was $actual" 
+      #         exit 1
+      #       fi
+      #     done
+      #     if [[ $(cat COUNTER.tmp) != ${{ matrix.suites.count }} ]]; then
+      #       echo "Expected ${{ matrix.suites.count }} positions was $(cat COUNTER.tmp)" 
+      #       exit 1
+      #     else 
+      #       echo "${{ matrix.suites.count }}/$(cat COUNTER.tmp) positions done."
+      #     fi
