@@ -9,12 +9,12 @@ const move_gen = @import("move_generation.zig");
 const uci = @import("uci.zig");
 
 pub fn main() !void {
-    attacks.init_attacks();
-
-    var b = types.Board.new();
-    try bitboard.fan_pars(types.start_position, &b);
-
-    bitboard.print_unicode_board(b);
+    // attacks.init_attacks();
+    //
+    // var b = types.Board.new();
+    // try bitboard.fan_pars(types.start_position, &b);
+    //
+    // bitboard.print_unicode_board(b);
 
     // var movesWhite: lists.MoveList = .{};
     // move_gen.generate_moves(&b, &movesWhite, types.Color.Black);
@@ -34,9 +34,10 @@ pub fn main() !void {
     //         print("Illegal move made", .{});
     //     }
     // }
-    //
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
 
-    //util.perft_test(&b, 5);
-    //
-    util.perft_test_detailed(&b, 5);
+    var game = uci.UCI.new(allocator);
+    try game.uci_loop();
 }
