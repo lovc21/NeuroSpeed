@@ -17,12 +17,19 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     if (debug == 1) {
-        var b = types.Board.new();
-        try bitboard.fan_pars("4k3/2ppp3/8/8/8/8/2P5/4K3 w KQkq - 0 1", &b);
-        bitboard.print_unicode_board(b);
+        attacks.init_attacks();
 
-        const game_eval = eval.evaluat_material(b);
-        print("Eval: {d}\n", .{game_eval});
+        // Test with starting position
+        var board = types.Board.new();
+        try bitboard.fan_pars("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", &board);
+        print("Starting position phase: White={}, Black={}\n", .{ eval.phase[0], eval.phase[1] });
+        // Should print: White=11, Black=11
+
+        // Test with endgame position
+        try bitboard.fan_pars("8/8/8/8/8/8/8/K7 w - - 0 1", &board);
+        print("King vs King phase: White={}, Black={}\n", .{ eval.phase[0], eval.phase[1] });
+        // Should print: White=0, Black=0
+
     } else {
         var game = uci.UCI.new(allocator);
         try game.uci_loop();

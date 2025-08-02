@@ -3,6 +3,7 @@ const util = @import("util.zig");
 const types = @import("types.zig");
 const attacks = @import("attacks.zig");
 const tables = @import("tabeles.zig");
+const eval = @import("evaluation.zig");
 const print = std.debug.print;
 
 pub fn print_board(bitboard: types.Bitboard) void {
@@ -51,10 +52,38 @@ pub fn print_unicode_board(board: types.Board) void {
         else => "Both",
     };
 
+    var cast_buffer: [5]u8 = undefined;
+    var cast_len: usize = 0;
+    if (board.castle & @intFromEnum(types.Castle.WK) != 0) {
+        cast_buffer[cast_len] = 'K';
+        cast_len += 1;
+    }
+    if (board.castle & @intFromEnum(types.Castle.WQ) != 0) {
+        cast_buffer[cast_len] = 'Q';
+        cast_len += 1;
+    }
+    if (board.castle & @intFromEnum(types.Castle.BK) != 0) {
+        cast_buffer[cast_len] = 'k';
+        cast_len += 1;
+    }
+    if (board.castle & @intFromEnum(types.Castle.BQ) != 0) {
+        cast_buffer[cast_len] = 'q';
+        cast_len += 1;
+    }
+    if (cast_len == 0) {
+        cast_buffer[0] = '-';
+        cast_len = 1;
+    }
+    const cast_str = cast_buffer[0..cast_len];
+
+    var evaluator = eval.Evaluat.init_empty();
+    evaluator.calculate_initial_phase(&board);
+
     print("\n     a b c d e f g h\n\n", .{});
     print(" Side: {s}\n", .{side_str});
-    // print(" En-passant: {s}\n", .{board.enpassant});
-    // print(" Castling:   {s}\n", .{cast_str})
+    print(" En-passant: {s}\n", .{board.enpassant});
+    print(" Castling:   {s}\n", .{cast_str});
+    print("Phase white: {}, phase black: {}\n", .{ evaluator.phase[0], evaluator.phase[1] });
     print(" Bitboard: 0x{0x}\n", .{board.pieces_combined()});
     print(" Bitboard: 0b{b}\n\n", .{board.pieces_combined()});
 }
@@ -179,6 +208,7 @@ pub fn fan_pars(fen: []const u8, board: *types.Board) !void {
     // print("  active   : {s}\n", .{active});
     // print("  castling : {s}\n", .{castl});
     // print("  en-pass. : {s}\n\n", .{ep});
+    eval.* = eval.Evaluat.init_empty();
 
     //  parse placement
     var rank: usize = 0;
@@ -212,6 +242,9 @@ pub fn fan_pars(fen: []const u8, board: *types.Board) !void {
         const sq_idx = (7 - rank) * 8 + file;
         const piece_index: usize = @intCast(@intFromEnum(pe));
         board.pieces[piece_index] |= (@as(u64, 1) << @intCast(sq_idx));
+
+        eval.Evaluat.put_piece_phase(pe);
+
         file += 1;
     }
 

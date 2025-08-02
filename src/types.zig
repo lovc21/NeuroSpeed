@@ -187,14 +187,15 @@ pub const BoardState = struct {
 };
 
 pub const Board = struct {
-    pub const PieceCount = @intFromEnum(Piece.NO_PIECE) + 1;
-
     pieces: [PieceCount]Bitboard,
     board: [64]Piece,
     side: Color,
     enpassant: square,
-    castle: u8, // bitmask of Castle.*
-    
+    castle: u8, // bitmask of Castle
+   
+
+    pub const PieceCount = @intFromEnum(Piece.NO_PIECE) + 1;
+
     pub fn white_pieces(self: *const Board) Bitboard {
         return self.pieces[Piece.WHITE_PAWN.toU4()] | 
                self.pieces[Piece.WHITE_KNIGHT.toU4()] | 
