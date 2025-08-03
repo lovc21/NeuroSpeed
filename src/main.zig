@@ -18,18 +18,6 @@ pub fn main() !void {
 
     if (debug == 1) {
         attacks.init_attacks();
-
-        // Test with starting position
-        var board = types.Board.new();
-        try bitboard.fan_pars("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", &board);
-        print("Starting position phase: White={}, Black={}\n", .{ eval.phase[0], eval.phase[1] });
-        // Should print: White=11, Black=11
-
-        // Test with endgame position
-        try bitboard.fan_pars("8/8/8/8/8/8/8/K7 w - - 0 1", &board);
-        print("King vs King phase: White={}, Black={}\n", .{ eval.phase[0], eval.phase[1] });
-        // Should print: White=0, Black=0
-
     } else {
         var game = uci.UCI.new(allocator);
         try game.uci_loop();

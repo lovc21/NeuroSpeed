@@ -6,6 +6,7 @@ const nnue = @import("nnue.zig");
 const print = std.debug.print;
 const util = @import("util.zig");
 // Position Evaluation
+pub var global_evaluator: Evaluat = Evaluat.init_empty();
 
 const mid_game_material_score: [6]i32 = .{ 82, 337, 365, 477, 1025, 0 };
 const end_game_material_score: [6]i32 = .{ 94, 281, 297, 512, 936, 0 };
@@ -175,7 +176,15 @@ const end_game_tables: [6][64]i16 = .{
 pub const Evaluat = struct {
     mid_game_eval: i32,
     end_game_eval: i32,
-    phase: [2]u8 = [1]u8{0} ** 2,
+    phase: [2]u32 = [1]u32{0} ** 2,
+
+    pub fn init_empty() Evaluat {
+        return Evaluat{
+            .mid_game_eval = 0,
+            .end_game_eval = 0,
+            .phase = [1]u32{0} ** 2,
+        };
+    }
 
     pub inline fn put_piece_phase(self: *Evaluat, piece: types.Piece) void {
         const piece_type_idx = get_piece_type_index(piece);
@@ -202,7 +211,7 @@ pub const Evaluat = struct {
 
     // Calculate initial phase from board
     pub fn calculate_initial_phase(self: *Evaluat, board: *const types.Board) void {
-        self.phase = [1]u8{0} ** 2;
+        self.phase = [1]u32{0} ** 2;
 
         // Count white pieces
         for (0..6) |piece_type| {
@@ -217,14 +226,6 @@ pub const Evaluat = struct {
             const piece_count: u8 = @intCast(util.popcount(board.pieces[@intFromEnum(black_piece)]));
             self.phase[1] += game_phase_inc[piece_type] * piece_count;
         }
-    }
-
-    pub fn init_empty() Evaluat {
-        return Evaluat{
-            .mid_game_eval = 0,
-            .end_game_eval = 0,
-            .phase = [1]u8{0} ** 2,
-        };
     }
 
     pub fn hce_eval(self: Evaluat, board: types.Board, comptime color: types.Color) i32 {

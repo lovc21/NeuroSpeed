@@ -224,6 +224,8 @@ pub const Board = struct {
         var b: Board = undefined;
 
         @memset(b.pieces[0..], 0);
+        
+        @memset(b.board[0..], Piece.NO_PIECE);
 
         b.side = Color.White;
         b.enpassant = square.NO_SQUARE;
