@@ -4,6 +4,9 @@ const types = @import("types.zig");
 const attacks = @import("attacks.zig");
 const bitboard = @import("bitboard.zig");
 const util = @import("util.zig");
+const eval = @import("evaluation.zig");
+const move_gen = @import("move_generation.zig");
+const lists = @import("lists.zig");
 const print = std.debug.print;
 const expect = std.testing.expect;
 
@@ -450,7 +453,6 @@ test "Perft Test the move generation start position" {
     try std.testing.expectEqual(stats.castles, 0);
     try std.testing.expectEqual(stats.double_checks, 0);
     try std.testing.expectEqual(stats.checkmates, 347);
-
     print("\n=== Testing FEN: {s}\n", .{types.start_position});
     print("Perft test for the start position done\n", .{});
 }
@@ -478,4 +480,151 @@ test "Perft Test the move generation tricky position" {
 
     print("\n=== Testing FEN: {s}\n", .{types.tricky_position});
     print("Perft test for the tricky position done\n", .{});
+}
+
+test "test piece evaluation" {
+    //TODO
+}
+
+test "test phase calculation" {
+    attacks.init_attacks();
+
+    print("\n--- Test 1: Starting Position ---\n", .{});
+    var board = types.Board.new();
+    try bitboard.fan_pars(types.start_position, &board);
+    print("FEN: {s}\n", .{types.start_position});
+    print("Expected: White=16, Black=16 (P=0, N=1, B=1, R=3, Q=6, K=0 → 0+2+2+6+6+0=16 per side)\n", .{});
+    try std.testing.expectEqual(eval.global_evaluator.phase[0], 16);
+    try std.testing.expectEqual(eval.global_evaluator.phase[1], 16);
+
+    print("\n--- Test 2: Empty Board ---\n", .{});
+    try bitboard.fan_pars(types.empty_board, &board);
+    print("FEN: {s}\n", .{types.empty_board});
+    print("Expected: White=0, Black=0 (no pieces)\n", .{});
+    try std.testing.expectEqual(eval.global_evaluator.phase[0], 0);
+    try std.testing.expectEqual(eval.global_evaluator.phase[1], 0);
+
+    print("\n--- Test 3: King vs King ---\n", .{});
+    try bitboard.fan_pars("8/8/8/8/8/8/8/K6k w - - 0 1", &board);
+    print("FEN: 8/8/8/8/8/8/8/K6k w - - 0 1\n", .{});
+    print("Expected: White=0, Black=0 (only kings, K=0 phase)\n", .{});
+    try std.testing.expectEqual(eval.global_evaluator.phase[0], 0);
+    try std.testing.expectEqual(eval.global_evaluator.phase[1], 0);
+
+    print("\n--- Test 4: Queen Endgame ---\n", .{});
+    try bitboard.fan_pars("8/8/8/8/8/8/8/KQ5k w - - 0 1", &board);
+    print("FEN: 8/8/8/8/8/8/8/KQ5k w - - 0 1\n", .{});
+    print("Expected: White=6, Black=0 (white queen=6 phase)\n", .{});
+    try std.testing.expectEqual(eval.global_evaluator.phase[0], 6); // white
+    try std.testing.expectEqual(eval.global_evaluator.phase[1], 0); // black
+
+    print("\n--- Test 5: Complex Middlegame ---\n", .{});
+    try bitboard.fan_pars(types.tricky_position, &board);
+    print("FEN: {s}\n", .{types.tricky_position});
+    print("Expected: Count all pieces - complex position\n", .{});
+    try std.testing.expectEqual(eval.global_evaluator.phase[0], 16);
+    try std.testing.expectEqual(eval.global_evaluator.phase[1], 16);
+
+    print("\n--- Test 7: Move Making and Phase Updates ---\n", .{});
+    try bitboard.fan_pars(types.start_position, &board);
+    print("Starting position phases: White={}, Black={}\n", .{ eval.global_evaluator.phase[0], eval.global_evaluator.phase[1] });
+
+    var move_list: lists.MoveList = .{};
+
+    try bitboard.fan_pars("rnbqkb1r/pppp1ppp/5n2/4p1B1/4P3/8/PPPP1PPP/RNBQK1NR w KQkq e6 0 2", &board);
+    print("\nAfter 1.e4 e5 - phases: White={}, Black={}\n", .{ eval.global_evaluator.phase[0], eval.global_evaluator.phase[1] });
+
+    move_gen.generate_moves(&board, &move_list, types.Color.White);
+
+    var capture_made = false;
+    for (0..move_list.count) |i| {
+        const move = move_list.moves[i];
+        if (move_gen.Print_move_list.is_capture(move)) {
+            print("Making capture move: {s}{s}\n", .{ types.SquareString.getSquareToString(@enumFromInt(move.from)), types.SquareString.getSquareToString(@enumFromInt(move.to)) });
+            const old_phase_w = eval.global_evaluator.phase[0];
+            const old_phase_b = eval.global_evaluator.phase[1];
+
+            if (move_gen.make_move(&board, move)) {
+                print("Phases before capture: White={}, Black={}\n", .{ old_phase_w, old_phase_b });
+                print("Phases after capture:  White={}, Black={}\n", .{ eval.global_evaluator.phase[0], eval.global_evaluator.phase[1] });
+                capture_made = true;
+                try std.testing.expectEqual(eval.global_evaluator.phase[0], 16);
+                try std.testing.expectEqual(eval.global_evaluator.phase[1], 15);
+                break;
+            }
+        }
+    }
+
+    if (!capture_made) {
+        print("No captures available in this position\n", .{});
+    }
+
+    print("\n--- Test 8: Promotion Test ---\n", .{});
+    try bitboard.fan_pars("8/P7/8/8/8/8/8/K6k w - - 0 1", &board);
+    print("Pawn promotion setup - phases: White={}, Black={}\n", .{ eval.global_evaluator.phase[0], eval.global_evaluator.phase[1] });
+
+    move_list = .{};
+    move_gen.generate_moves(&board, &move_list, types.Color.White);
+
+    // Find and make a promotion
+    for (0..move_list.count) |i| {
+        const move = move_list.moves[i];
+        if (move_gen.Print_move_list.is_promotion(move) and move.flags == types.MoveFlags.PR_QUEEN) {
+            print("Making promotion to queen: {s}{s}\n", .{ types.SquareString.getSquareToString(@enumFromInt(move.from)), types.SquareString.getSquareToString(@enumFromInt(move.to)) });
+            const old_phase_w = eval.global_evaluator.phase[0];
+            const old_phase_b = eval.global_evaluator.phase[1];
+
+            if (move_gen.make_move(&board, move)) {
+                print("Phases before promotion: White={}, Black={}\n", .{ old_phase_w, old_phase_b });
+                print("Phases after promotion:  White={}, Black={}\n", .{ eval.global_evaluator.phase[0], eval.global_evaluator.phase[1] });
+                print("Expected change: -0 (pawn) +6 (queen) = +6 for white\n", .{});
+                try std.testing.expectEqual(eval.global_evaluator.phase[0], 6);
+                try std.testing.expectEqual(eval.global_evaluator.phase[1], 0);
+                break;
+            }
+        }
+    }
+}
+
+test "test evaluation end games" {
+    attacks.init_attacks();
+
+    print("\n=== TESTING EVALUATION FUNCTION ===\n", .{});
+    const EndgameTest = struct {
+        fen: []const u8,
+        description: []const u8,
+        expected_result: []const u8,
+        expected_range: [2]i32,
+    };
+
+    const tests = [_]EndgameTest{
+        .{ .fen = "8/8/8/8/8/8/8/K6k w - - 0 1", .description = "King vs King", .expected_result = "Draw", .expected_range = .{ -10, 10 } },
+        .{ .fen = "8/8/8/8/8/8/8/KB5k w - - 0 1", .description = "Bishop vs King", .expected_result = "Draw", .expected_range = .{ -50, 50 } },
+        .{ .fen = "8/8/8/8/8/8/8/KN5k w - - 0 1", .description = "Knight vs King", .expected_result = "Draw", .expected_range = .{ -50, 50 } },
+        .{ .fen = "8/8/8/8/8/8/Q7/K6k w - - 0 1", .description = "Queen vs King", .expected_result = "White wins", .expected_range = .{ 800, 1200 } },
+        .{ .fen = "8/8/8/8/8/8/R7/K6k w - - 0 1", .description = "Rook vs King", .expected_result = "White wins", .expected_range = .{ 400, 600 } },
+        .{ .fen = "8/8/8/8/8/8/8/KBN4k w - - 0 1", .description = "Bishop + Knight vs King", .expected_result = "White wins (difficult)", .expected_range = .{ 300, 700 } },
+        .{ .fen = "8/8/8/8/8/8/8/KRR4k w - - 0 1", .description = "Two Rooks vs King", .expected_result = "White wins easily", .expected_range = .{ 900, 1200 } },
+        .{ .fen = "8/8/8/8/8/8/P7/K6k w - - 0 1", .description = "King + Pawn vs King", .expected_result = "Usually wins", .expected_range = .{ 100, 300 } },
+    };
+
+    for (tests, 0..) |test_case, i| {
+        var board = types.Board.new();
+        try bitboard.fan_pars(test_case.fen, &board);
+
+        const evaluation = eval.global_evaluator.eval(board, types.Color.White);
+        const min_expected = test_case.expected_range[0];
+        const max_expected = test_case.expected_range[1];
+
+        print("Test {}: {s} ({s}) → {d} centipawns\n", .{
+            i + 1,
+            test_case.description,
+            test_case.expected_result,
+            evaluation,
+        });
+
+        if (!(evaluation >= min_expected and evaluation <= max_expected)) {
+            try std.testing.expectFmt("error", "expected value in range {}–{}, but got {}\n", .{ min_expected, max_expected, evaluation });
+        }
+    }
 }

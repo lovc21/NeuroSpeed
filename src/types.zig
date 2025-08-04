@@ -79,7 +79,7 @@ pub const Color = enum {
     both,
 
     pub inline fn toU4(self: Color) u4 {
-        return @as(u4, @truncate(@intFromEnum(self)));
+        return @intCast(@intFromEnum(self)); 
     }
 };
 
@@ -187,14 +187,15 @@ pub const BoardState = struct {
 };
 
 pub const Board = struct {
-    pub const PieceCount = @intFromEnum(Piece.NO_PIECE) + 1;
-
     pieces: [PieceCount]Bitboard,
     board: [64]Piece,
     side: Color,
     enpassant: square,
-    castle: u8, // bitmask of Castle.*
-    
+    castle: u8, // bitmask of Castle
+   
+
+    pub const PieceCount = @intFromEnum(Piece.NO_PIECE) + 1;
+
     pub fn white_pieces(self: *const Board) Bitboard {
         return self.pieces[Piece.WHITE_PAWN.toU4()] | 
                self.pieces[Piece.WHITE_KNIGHT.toU4()] | 
@@ -223,6 +224,8 @@ pub const Board = struct {
         var b: Board = undefined;
 
         @memset(b.pieces[0..], 0);
+        
+        @memset(b.board[0..], Piece.NO_PIECE);
 
         b.side = Color.White;
         b.enpassant = square.NO_SQUARE;

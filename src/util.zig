@@ -4,7 +4,7 @@ const lists = @import("lists.zig");
 const move_gen = @import("move_generation.zig");
 const attacks = @import("attacks.zig");
 const Bitboard = @import("bitboard.zig");
-
+const eval = @import("evaluation.zig");
 const print = std.debug.print;
 pub inline fn set_bit(bitboard: u64, s: types.square) u64 {
     return (bitboard | (@as(u64, 1) << @intCast(@intFromEnum(s))));
@@ -71,10 +71,15 @@ pub inline fn perft(comptime color: types.Color, board: *types.Board, depth: u8)
 
         // Make the move
         const original_state = board.save_state();
+        const saved_evaluator = eval.global_evaluator;
         if (move_gen.make_move(board, move)) {
             const result = perft(oponent_side, board, depth - 1);
             board.restore_state(original_state);
+            eval.global_evaluator = saved_evaluator;
             nodes += result;
+        } else {
+            board.restore_state(original_state);
+            eval.global_evaluator = saved_evaluator;
         }
     }
 
@@ -262,6 +267,7 @@ pub fn perft_detailed(comptime color: types.Color, board: *types.Board, depth: u
         for (0..move_list.count) |i| {
             const move = move_list.moves[i];
             const original_state = board.save_state();
+            const saved_evaluator = eval.global_evaluator;
 
             if (move_gen.make_move(board, move)) {
                 stats.nodes += 1;
@@ -301,19 +307,22 @@ pub fn perft_detailed(comptime color: types.Color, board: *types.Board, depth: u
                     for (0..opponent_moves.count) |j| {
                         const opponent_move = opponent_moves.moves[j];
                         const opponent_state = board.save_state();
+                        const opponent_saved_evaluator = eval.global_evaluator;
                         if (move_gen.make_move(board, opponent_move)) {
                             has_legal_move = true;
                             board.restore_state(opponent_state);
                             break;
                         }
+                        eval.global_evaluator = saved_evaluator;
                         board.restore_state(opponent_state);
+                        eval.global_evaluator = opponent_saved_evaluator;
                     }
 
                     if (!has_legal_move) {
                         stats.checkmates += 1;
                     }
                 }
-
+                eval.global_evaluator = saved_evaluator;
                 board.restore_state(original_state);
             }
         }
@@ -322,12 +331,17 @@ pub fn perft_detailed(comptime color: types.Color, board: *types.Board, depth: u
         for (0..move_list.count) |i| {
             const move = move_list.moves[i];
             const original_state = board.save_state();
+            const saved_evaluator = eval.global_evaluator;
 
             if (move_gen.make_move(board, move)) {
                 const sub_stats = perft_detailed(opponent_side, board, depth - 1);
                 stats.add(sub_stats);
 
                 board.restore_state(original_state);
+                eval.global_evaluator = saved_evaluator;
+            } else {
+                board.restore_state(original_state);
+                eval.global_evaluator = saved_evaluator;
             }
         }
     }
