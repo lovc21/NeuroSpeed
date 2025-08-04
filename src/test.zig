@@ -586,6 +586,45 @@ test "test phase calculation" {
     }
 }
 
-test "test evaluation" {
-    // TODO
+test "test evaluation end games" {
+    attacks.init_attacks();
+
+    print("\n=== TESTING EVALUATION FUNCTION ===\n", .{});
+    const EndgameTest = struct {
+        fen: []const u8,
+        description: []const u8,
+        expected_result: []const u8,
+        expected_range: [2]i32,
+    };
+
+    const tests = [_]EndgameTest{
+        .{ .fen = "8/8/8/8/8/8/8/K6k w - - 0 1", .description = "King vs King", .expected_result = "Draw", .expected_range = .{ -10, 10 } },
+        .{ .fen = "8/8/8/8/8/8/8/KB5k w - - 0 1", .description = "Bishop vs King", .expected_result = "Draw", .expected_range = .{ -50, 50 } },
+        .{ .fen = "8/8/8/8/8/8/8/KN5k w - - 0 1", .description = "Knight vs King", .expected_result = "Draw", .expected_range = .{ -50, 50 } },
+        .{ .fen = "8/8/8/8/8/8/Q7/K6k w - - 0 1", .description = "Queen vs King", .expected_result = "White wins", .expected_range = .{ 800, 1200 } },
+        .{ .fen = "8/8/8/8/8/8/R7/K6k w - - 0 1", .description = "Rook vs King", .expected_result = "White wins", .expected_range = .{ 400, 600 } },
+        .{ .fen = "8/8/8/8/8/8/8/KBN4k w - - 0 1", .description = "Bishop + Knight vs King", .expected_result = "White wins (difficult)", .expected_range = .{ 300, 700 } },
+        .{ .fen = "8/8/8/8/8/8/8/KRR4k w - - 0 1", .description = "Two Rooks vs King", .expected_result = "White wins easily", .expected_range = .{ 900, 1200 } },
+        .{ .fen = "8/8/8/8/8/8/P7/K6k w - - 0 1", .description = "King + Pawn vs King", .expected_result = "Usually wins", .expected_range = .{ 100, 300 } },
+    };
+
+    for (tests, 0..) |test_case, i| {
+        var board = types.Board.new();
+        try bitboard.fan_pars(test_case.fen, &board);
+
+        const evaluation = eval.global_evaluator.eval(board, types.Color.White);
+        const min_expected = test_case.expected_range[0];
+        const max_expected = test_case.expected_range[1];
+
+        print("Test {}: {s} ({s}) → {d} centipawns\n", .{
+            i + 1,
+            test_case.description,
+            test_case.expected_result,
+            evaluation,
+        });
+
+        if (!(evaluation >= min_expected and evaluation <= max_expected)) {
+            try std.testing.expectFmt("error", "expected value in range {}–{}, but got {}\n", .{ min_expected, max_expected, evaluation });
+        }
+    }
 }

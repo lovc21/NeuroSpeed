@@ -5,8 +5,13 @@ const types = @import("types.zig");
 const nnue = @import("nnue.zig");
 const print = std.debug.print;
 const util = @import("util.zig");
+
 // Position Evaluation
 pub var global_evaluator: Evaluat = Evaluat.init_empty();
+
+// tempo bonus
+const mid_game_tempo_bonus = 15;
+const end_game_tempo_bonus = 5;
 
 const mid_game_material_score: [6]i32 = .{ 82, 337, 365, 477, 1025, 0 };
 const end_game_material_score: [6]i32 = .{ 94, 281, 297, 512, 936, 0 };
@@ -176,14 +181,83 @@ const end_game_tables: [6][64]i16 = .{
 pub const Evaluat = struct {
     mid_game_eval: i32,
     end_game_eval: i32,
-    phase: [2]u32 = [1]u32{0} ** 2,
+    phase: [2]u8 = [1]u8{0} ** 2,
+    material_mg: i32,
+    material_eg: i32,
 
     pub fn init_empty() Evaluat {
         return Evaluat{
             .mid_game_eval = 0,
             .end_game_eval = 0,
-            .phase = [1]u32{0} ** 2,
+            .phase = [1]u8{0} ** 2,
+            .material_mg = 0,
+            .material_eg = 0,
         };
+    }
+
+    pub inline fn add_piece_material(self: *Evaluat, piece: types.Piece) void {
+        const piece_type_idx = get_piece_type_index(piece);
+        const color_multiplier: i32 = if (get_piece_color_index(piece) == 0) 1 else -1;
+
+        self.material_mg += mid_game_material_score[piece_type_idx] * color_multiplier;
+        self.material_eg += end_game_material_score[piece_type_idx] * color_multiplier;
+    }
+
+    pub inline fn remove_piece_material(self: *Evaluat, piece: types.Piece) void {
+        const piece_type_idx = get_piece_type_index(piece);
+        const color_multiplier: i32 = if (get_piece_color_index(piece) == 0) 1 else -1;
+
+        self.material_mg -= mid_game_material_score[piece_type_idx] * color_multiplier;
+        self.material_eg -= end_game_material_score[piece_type_idx] * color_multiplier;
+    }
+
+    // Initialize material from board position
+    pub fn calculate_initial_material(self: *Evaluat, board: *const types.Board) void {
+        self.material_mg = 0;
+        self.material_eg = 0;
+
+        // Count all pieces and add their material values
+        for (0..types.Board.PieceCount) |i| {
+            if (i == @intFromEnum(types.Piece.NO_PIECE)) continue;
+
+            const piece: types.Piece = @enumFromInt(i);
+            const count = util.popcount(board.pieces[i]);
+
+            for (0..count) |_| {
+                self.add_piece_material(piece);
+            }
+        }
+    }
+
+    // Initialize both phase and material from board
+    pub fn calculate_initial_phase_and_material(self: *Evaluat, board: *const types.Board) void {
+        self.phase = [1]u8{0} ** 2;
+        self.material_mg = 0;
+        self.material_eg = 0;
+
+        // Count white pieces
+        for (0..6) |piece_type| {
+            const white_piece: types.Piece = @enumFromInt(piece_type);
+            const piece_count: u8 = @intCast(util.popcount(board.pieces[@intFromEnum(white_piece)]));
+            self.phase[0] += game_phase_inc[piece_type] * piece_count;
+
+            // Add material
+            for (0..piece_count) |_| {
+                self.add_piece_material(white_piece);
+            }
+        }
+
+        // Count black pieces
+        for (0..6) |piece_type| {
+            const black_piece: types.Piece = @enumFromInt(piece_type + 8);
+            const piece_count: u8 = @intCast(util.popcount(board.pieces[@intFromEnum(black_piece)]));
+            self.phase[1] += game_phase_inc[piece_type] * piece_count;
+
+            // Add material
+            for (0..piece_count) |_| {
+                self.add_piece_material(black_piece);
+            }
+        }
     }
 
     pub inline fn put_piece_phase(self: *Evaluat, piece: types.Piece) void {
@@ -211,7 +285,7 @@ pub const Evaluat = struct {
 
     // Calculate initial phase from board
     pub fn calculate_initial_phase(self: *Evaluat, board: *const types.Board) void {
-        self.phase = [1]u32{0} ** 2;
+        self.phase = [1]u8{0} ** 2;
 
         // Count white pieces
         for (0..6) |piece_type| {
@@ -229,21 +303,26 @@ pub const Evaluat = struct {
     }
 
     pub fn hce_eval(self: Evaluat, board: types.Board, comptime color: types.Color) i32 {
-        const score: i32 = 0;
+        if (Evaluat.is_draw(board)) {
+            return 0;
+        }
 
         const phase: i32 = @intCast(@min(self.phase[types.Color.White.toU4()] + self.phase[types.Color.Black.toU4()], 64));
-        var mid_game_eval = self.mid_game_eval;
-        var end_game_eval = self.end_game_eval;
 
-        const pieces_score: i32 = evaluate_peace(board);
+        var mid_game_eval = self.mid_game_eval + self.material_mg;
+        var end_game_eval = self.end_game_eval + self.material_eg;
+
+        const pieces_score: [2]i32 = evaluate_peace(&board);
 
         mid_game_eval += pieces_score[0];
         end_game_eval += pieces_score[1];
 
-        _ = phase;
-        _ = color;
+        var score: i32 = @divTrunc((mid_game_eval * phase + end_game_eval * (64 - phase)), 64);
+        const tempo_bonus: i32 = @divTrunc(mid_game_tempo_bonus * phase + end_game_tempo_bonus * (64 - phase), 64);
 
-        return score;
+        score += evaluate_special_endgames(self, &board);
+
+        return if (color == types.Color.White) score + tempo_bonus else -(score + tempo_bonus);
     }
 
     pub fn eval(self: Evaluat, board: types.Board, comptime color: types.Color) i32 {
@@ -252,10 +331,99 @@ pub const Evaluat = struct {
             const score = 0;
             return score;
         } else {
-            self.hce_eval(board, color);
+            return self.hce_eval(board, color);
         }
     }
 
+    inline fn evaluate_special_endgames(self: Evaluat, board: *const types.Board) i32 {
+        var endgame_bonus: i32 = 0;
+
+        const white_phase = self.phase[types.Color.White.toU4()];
+        const black_phase = self.phase[types.Color.Black.toU4()];
+
+        // White winning
+        if (white_phase >= 3 and black_phase == 0 and util.popcount(board.pieces[@intFromEnum(types.Piece.BLACK_PAWN)]) == 0) {
+            const white_king_sq = util.lsb_index(board.pieces[@intFromEnum(types.Piece.WHITE_KING)]);
+            const black_king_sq = util.lsb_index(board.pieces[@intFromEnum(types.Piece.BLACK_KING)]);
+
+            // Bishop + Knight vs King (phase = 2)
+            if (white_phase == 2 and
+                util.popcount(board.pieces[@intFromEnum(types.Piece.WHITE_BISHOP)]) == 1 and
+                util.popcount(board.pieces[@intFromEnum(types.Piece.WHITE_KNIGHT)]) == 1)
+            {
+
+                // Bishop + Knight mate: drive king to correct corner
+                const bishop_on_light_squares = (board.pieces[@intFromEnum(types.Piece.WHITE_BISHOP)] & 0x55AA55AA55AA55AA) != 0;
+
+                // Bishop + Knight mate: drive king to correct corner
+                if (bishop_on_light_squares) {
+                    const corner_bonus = get_corner_distance_bonus(@intCast(black_king_sq), true);
+                    endgame_bonus += corner_bonus;
+                } else {
+                    const corner_bonus = get_corner_distance_bonus(@intCast(black_king_sq), false);
+                    endgame_bonus += corner_bonus;
+                }
+            } else {
+                // Negative because we want enemy king on edge
+                endgame_bonus -= CENTER_CONTROL[black_king_sq];
+            }
+
+            // Bring kings closer in winning endgames
+            const distance = king_distance(@intCast(white_king_sq), @intCast(black_king_sq));
+            // Closer is better
+            endgame_bonus -= @as(i32, @intCast(distance)) * 5;
+        }
+
+        // Black winning endgame
+        else if (black_phase >= 3 and white_phase == 0 and util.popcount(board.pieces[@intFromEnum(types.Piece.WHITE_PAWN)]) == 0) {
+            const white_king_sq = util.lsb_index(board.pieces[@intFromEnum(types.Piece.WHITE_KING)]);
+            const black_king_sq = util.lsb_index(board.pieces[@intFromEnum(types.Piece.BLACK_KING)]);
+
+            // Bishop + Knight vs King
+            if (black_phase == 2 and
+                util.popcount(board.pieces[@intFromEnum(types.Piece.BLACK_BISHOP)]) == 1 and
+                util.popcount(board.pieces[@intFromEnum(types.Piece.BLACK_KNIGHT)]) == 1)
+            {
+                const bishop_on_light_squares = (board.pieces[@intFromEnum(types.Piece.BLACK_BISHOP)] & 0x55AA55AA55AA55AA) != 0;
+
+                // Bishop + Knight mate: drive king to correct corner Negative because it's good for Black
+                if (bishop_on_light_squares) {
+                    const corner_bonus = get_corner_distance_bonus(@intCast(white_king_sq), true);
+                    endgame_bonus -= corner_bonus;
+                } else {
+                    const corner_bonus = get_corner_distance_bonus(@intCast(white_king_sq), false);
+                    endgame_bonus -= corner_bonus;
+                }
+            } else {
+                // General winning endgame: bring kings closer
+                endgame_bonus += CENTER_CONTROL[white_king_sq];
+            }
+
+            // Bring kings closer
+            const distance = king_distance(@intCast(white_king_sq), @intCast(black_king_sq));
+            endgame_bonus += @as(i32, @intCast(distance)) * 5;
+        }
+
+        return endgame_bonus;
+    }
+
+    inline fn get_corner_distance_bonus(king_sq: u6, light_square_mate: bool) i32 {
+        var distance_to_corner: u4 = 14; // Max distance
+
+        // Distance to a8 (rank 7, file 0) or h1 (rank 0, file 7)
+        if (light_square_mate) {
+            const dist_a8: u4 = king_distance(king_sq, 56);
+            const dist_h1: u4 = king_distance(king_sq, 7);
+            distance_to_corner = @min(dist_a8, dist_h1);
+        } else {
+            const dist_a1: u4 = king_distance(king_sq, 0);
+            const dist_h8: u4 = king_distance(king_sq, 63);
+            distance_to_corner = @min(dist_a1, dist_h8);
+        }
+
+        // Bonus for being closer to the correct corner
+        return (14 - @as(i32, @intCast(distance_to_corner))) * 10;
+    }
     // inspired by https://github.com/jabolcni/Lambergar/blob/822957acfbb2d386c29889cce17b8d88c999e2a1/src/evaluation.zig#L541C1-L1479C2 and added some additional features
     pub fn evaluate_peace(board: *const types.Board) [2]i32 {
         var score = [_]i32{ 0, 0 };
@@ -1246,6 +1414,29 @@ pub const Evaluat = struct {
         return false;
     }
 };
+
+const CENTER_CONTROL = [64]i32{
+    -30, -20, -10, 0,  0,  -10, -20, -30,
+    -20, -10, 0,   10, 10, 0,   -10, -20,
+    -10, 0,   10,  20, 20, 10,  0,   -10,
+    0,   10,  20,  30, 30, 20,  10,  0,
+    0,   10,  20,  30, 30, 20,  10,  0,
+    -10, 0,   10,  20, 20, 10,  0,   -10,
+    -20, -10, 0,   10, 10, 0,   -10, -20,
+    -30, -20, -10, 0,  0,  -10, -20, -30,
+};
+
+inline fn king_distance(sq1: u6, sq2: u6) u4 {
+    const file1 = sq1 % 8;
+    const rank1 = sq1 / 8;
+    const file2 = sq2 % 8;
+    const rank2 = sq2 / 8;
+
+    const file_dist = if (file1 > file2) file1 - file2 else file2 - file1;
+    const rank_dist = if (rank1 > rank2) rank1 - rank2 else rank2 - rank1;
+
+    return @intCast(@max(file_dist, rank_dist));
+}
 
 const mg_passed_score: [64]i32 = .{
     0,  0,  0,   0,   0,   0,   0,   0,

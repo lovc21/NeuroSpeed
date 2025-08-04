@@ -529,6 +529,7 @@ inline fn get_promoted_piece(flags: types.MoveFlags, side: types.Color) types.Pi
 
 pub fn make_move(board: *types.Board, move: Move) bool {
     const saved_state = board.save_state();
+    const saved_evaluator = eval.global_evaluator;
 
     const source_square = move.from;
     const target_square = move.to;
@@ -568,6 +569,7 @@ pub fn make_move(board: *types.Board, move: Move) bool {
                     board.pieces[captured_piece_idx] = util.clear_bit(board.pieces[captured_piece_idx], @enumFromInt(target_square));
                     const captured_piece: types.Piece = @enumFromInt(captured_piece_idx);
                     eval.global_evaluator.remove_piece_phase(captured_piece);
+                    eval.global_evaluator.remove_piece_material(captured_piece);
                     break;
                 }
             }
@@ -583,7 +585,9 @@ pub fn make_move(board: *types.Board, move: Move) bool {
         board.pieces[@intFromEnum(promoted_piece)] = util.set_bit(board.pieces[@intFromEnum(promoted_piece)], @enumFromInt(target_square));
 
         eval.global_evaluator.remove_piece_phase(pawn_piece);
+        eval.global_evaluator.remove_piece_material(pawn_piece);
         eval.global_evaluator.put_piece_phase(promoted_piece);
+        eval.global_evaluator.add_piece_material(promoted_piece);
     }
 
     // Handle en passant capture
@@ -596,6 +600,7 @@ pub fn make_move(board: *types.Board, move: Move) bool {
         const captured_pawn = if (moving_side == types.Color.White) types.Piece.BLACK_PAWN else types.Piece.WHITE_PAWN;
         board.pieces[@intFromEnum(captured_pawn)] = util.clear_bit(board.pieces[@intFromEnum(captured_pawn)], @enumFromInt(captured_pawn_square));
         eval.global_evaluator.remove_piece_phase(captured_pawn);
+        eval.global_evaluator.remove_piece_material(captured_pawn);
     }
 
     // Reset en passant square
@@ -625,7 +630,7 @@ pub fn make_move(board: *types.Board, move: Move) bool {
     if (bitboard.is_square_attacked(board, our_king_square, opponent_side)) {
         // Restore board state - illegal move
         board.restore_state(saved_state);
-        eval.global_evaluator.calculate_initial_phase(board);
+        eval.global_evaluator = saved_evaluator;
         return false;
     }
 

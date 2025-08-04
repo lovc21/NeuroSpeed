@@ -79,7 +79,7 @@ pub const Color = enum {
     both,
 
     pub inline fn toU4(self: Color) u4 {
-        return @as(u4, @truncate(@intFromEnum(self)));
+        return @intCast(@intFromEnum(self)); 
     }
 };
 

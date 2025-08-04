@@ -245,6 +245,8 @@ pub fn fan_pars(fen: []const u8, board: *types.Board) !void {
 
         // Update phase for this piece
         eval.global_evaluator.put_piece_phase(pe);
+        // Add material for this piece
+        eval.global_evaluator.add_piece_material(pe);
 
         file += 1;
     }
