@@ -53,11 +53,10 @@ pub const UCI = struct {
 
         // Generate legal moves to find the matching move
         var move_list: lists.MoveList = .{};
-        if (self.board.side == types.Color.White) {
-            move_gen.generate_moves(&self.board, &move_list, types.Color.White);
-        } else {
+        if (self.board.side == types.Color.White)
+            move_gen.generate_moves(&self.board, &move_list, types.Color.White)
+        else
             move_gen.generate_moves(&self.board, &move_list, types.Color.Black);
-        }
 
         // Find matching move
         for (0..move_list.count) |i| {
@@ -85,7 +84,7 @@ pub const UCI = struct {
     // Parse a position command
     fn parse_position(self: *UCI, command: []const u8) !void {
         var tokens = std.mem.tokenizeScalar(u8, command, ' ');
-        _ = tokens.next(); // Skip "position"
+        _ = tokens.next();
 
         const position_type = tokens.next() orelse return;
 
@@ -132,7 +131,7 @@ pub const UCI = struct {
     // parse go
     fn parse_go(self: *UCI, command: []const u8) void {
         var tokens = std.mem.tokenizeScalar(u8, command, ' ');
-        _ = tokens.next(); // Skip "go"
+        _ = tokens.next();
 
         var depth: ?u8 = null;
         var movetime: ?u64 = null;
@@ -212,11 +211,18 @@ pub const UCI = struct {
         }
 
         // Start search in a separate thread
-        self.search_thread = std.Thread.spawn(.{}, searchWrapper, .{ self, depth, calculated_time }) catch null;
+        self.search_thread = std.Thread.spawn(.{}, searchWrapper, .{ self, depth, calculated_time }) catch |err| {
+            print("Error starting search thread: {}\n", .{err});
+            return;
+        };
     }
 
     fn searchWrapper(self: *UCI, depth: ?u8, time_ms: u64) void {
-        search.search_position(self, depth, time_ms);
+        if (self.board.side == types.Color.White) {
+            search.search_position(&self.board, depth, time_ms, types.Color.White);
+        } else {
+            search.search_position(&self.board, depth, time_ms, types.Color.Black);
+        }
     }
     // main loop
     pub fn uci_loop(self: *UCI) !void {
@@ -267,27 +273,20 @@ pub const UCI = struct {
                     // Debug command to display board
                     bitboard.print_unicode_board(self.board);
                 } else if (std.mem.eql(u8, command, "perft")) {
-                    // Perft command for testing
-                    // var depth: u8 = 1;
-                    // if (tokens.next()) |depth_str| {
-                    //     depth = std.fmt.parseUnsigned(u8, depth_str, 10) catch 1;
-                    // }
-                    //
-                    // const nodes = if (self.board.side == types.Color.White)
-                    //     util.perft(types.Color.White, &self.board, depth)
-                    // else
-                    //     util.perft(types.Color.Black, &self.board, depth);
-                    //
-                    // try stdout.print("Nodes searched: {d}\n", .{nodes});
+                    var depth: u8 = 1;
+                    if (tokens.next()) |depth_str| {
+                        depth = std.fmt.parseUnsigned(u8, depth_str, 10) catch 1;
+                    }
+
+                    util.perft_test_detailed(&self.board, depth);
                 } else if (std.mem.eql(u8, command, "setoption")) {
                     // Parse setoption command (currently just ignore)
                     // Format: setoption name <name> value <value>
-                    // You can implement option handling here
                 } else {
-                    // Unknown command - ignore as per UCI spec
+                    try stdout.print("Unknown command: {s}\n", .{command});
+                    break;
                 }
             } else |err| {
-                // Handle read error
                 print("Error reading input: {}\n", .{err});
                 break;
             }

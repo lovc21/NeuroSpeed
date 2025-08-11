@@ -6,6 +6,7 @@ const attacks = @import("attacks.zig");
 const Bitboard = @import("bitboard.zig");
 const eval = @import("evaluation.zig");
 const print = std.debug.print;
+
 pub inline fn set_bit(bitboard: u64, s: types.square) u64 {
     return (bitboard | (@as(u64, 1) << @intCast(@intFromEnum(s))));
 }
