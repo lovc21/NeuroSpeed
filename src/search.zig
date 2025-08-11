@@ -159,4 +159,3 @@ pub fn search_position(board: *types.Board, max_depth: ?u8, time_ms: u64, compti
         }
     }
 }
-
