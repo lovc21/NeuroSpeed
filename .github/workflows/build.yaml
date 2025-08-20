@@ -1,0 +1,153 @@
+name: build
+
+on: 
+  push:
+    tags:
+       - 'v[0-9]+.[0-9]+.[0-9]+'
+    branches:
+      - main
+
+
+jobs:
+  generate-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: set-matrix
+        run: echo "matrix=$(cat .github/build-matrix.json | jq -c .)" >> $GITHUB_OUTPUT
+  build:
+    needs: generate-matrix  
+    strategy:
+      matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: "0.14.0"
+      
+      - name: Build engine
+        shell: bash  
+        run: | 
+          mkdir -p dist
+          
+          if [ "${{ matrix.cpu }}" != "null" ] && [ -n "${{ matrix.cpu }}" ]; then
+            echo "Building for target: ${{ matrix.target }} with CPU: ${{ matrix.cpu }}"
+            zig build -Dtarget=${{ matrix.target }} -Dcpu=${{ matrix.cpu }} -Doptimize=ReleaseFast
+          else
+            echo "Building for target: ${{ matrix.target }} (baseline)"
+            zig build -Dtarget=${{ matrix.target }} -Doptimize=ReleaseFast
+          fi
+          
+          if [[ "${{ matrix.target }}" == *"windows"* ]]; then
+            BINARY_EXT=".exe"
+          else
+            BINARY_EXT=""
+          fi
+          
+          TARGET_ARCH=$(echo "${{ matrix.target }}" | cut -d'-' -f1)
+          TARGET_OS=$(echo "${{ matrix.target }}" | cut -d'-' -f2)
+          
+          if [ "${{ matrix.cpu }}" != "null" ] && [ -n "${{ matrix.cpu }}" ]; then
+            ARCHIVE_NAME="NeuroSpeed-${TARGET_ARCH}-${TARGET_OS}-${{ matrix.cpu }}"
+          else
+            ARCHIVE_NAME="NeuroSpeed-${TARGET_ARCH}-${TARGET_OS}"
+          fi
+          
+          BINARY_PATH="zig-out/bin/NeuroSpeed${BINARY_EXT}"
+ 
+          if [[ "${{ matrix.target }}" == *"windows"* ]]; then
+            cp "$BINARY_PATH" "dist/NeuroSpeed.exe"
+            cd dist
+            zip "../${ARCHIVE_NAME}.zip" NeuroSpeed.exe
+            cd ..
+            echo "ASSET_PATH=${ARCHIVE_NAME}.zip" >> $GITHUB_ENV
+          else
+            cp "$BINARY_PATH" "dist/NeuroSpeed"
+            cd dist
+            tar -czf "../${ARCHIVE_NAME}.tar.gz" NeuroSpeed
+            cd ..
+            echo "ASSET_PATH=${ARCHIVE_NAME}.tar.gz" >> $GITHUB_ENV
+          fi
+          
+          echo "ASSET_NAME=${ARCHIVE_NAME}" >> $GITHUB_ENV
+      
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ASSET_NAME }}
+          path: ${{ env.ASSET_PATH }}
+          retention-days: 1
+
+  create-release:
+    if: startsWith(github.ref, 'refs/tags/') 
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref_name }}
+          release_name: Release ${{ github.ref_name }}
+          body: |
+            ## NeuroSpeed ${{ github.ref_name }}
+            
+            Automated release created from tag ${{ github.ref_name }}.
+            
+            ### Downloads
+            
+            **Windows:**
+            - `NeuroSpeed-x86_64-windows.zip` - Generic x86_64
+            - `NeuroSpeed-x86_64-windows-x86_64_v3.zip` - Optimized for modern CPUs
+            - `NeuroSpeed-x86_64-windows-znver3.zip` - Optimized for AMD Zen 3
+            
+            **Linux:**
+            - `NeuroSpeed-x86_64-linux.tar.gz` - Generic x86_64
+            - `NeuroSpeed-x86_64-linux-x86_64_v3.tar.gz` - Optimized for modern CPUs
+            - `NeuroSpeed-aarch64-linux.tar.gz` - Generic ARM64
+            - `NeuroSpeed-aarch64-linux-cortex_a76.tar.gz` - Optimized for Cortex-A76
+            - `NeuroSpeed-aarch64-linux-neoverse_n1.tar.gz` - Optimized for AWS Graviton
+            
+            **macOS:**
+            - `NeuroSpeed-x86_64-macos.tar.gz` - Intel Mac
+            - `NeuroSpeed-aarch64-macos.tar.gz` - Apple Silicon (generic)
+            - `NeuroSpeed-aarch64-macos-apple_m1.tar.gz` - Optimized for M1
+            - `NeuroSpeed-aarch64-macos-apple_m2.tar.gz` - Optimized for M2
+            
+            **WebAssembly:**
+            - `NeuroSpeed-wasm32-wasi.tar.gz` - WASI runtime
+          draft: false
+          prerelease: false
+      
+      - name: Upload Release Assets
+        run: |
+          # Upload all artifacts to the release
+          for artifact_dir in artifacts/*/; do
+            if [ -d "$artifact_dir" ]; then
+              for file in "$artifact_dir"*; do
+                if [ -f "$file" ]; then
+                  echo "Uploading: $file"
+                  gh release upload ${{ github.ref_name }} "$file" --clobber
+                fi
+              done
+            fi
+          done
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
