@@ -280,8 +280,7 @@ pub const UCI = struct {
 
                     util.perft_test_detailed(&self.board, depth);
                 } else if (std.mem.eql(u8, command, "setoption")) {
-                    // Parse setoption command (currently just ignore)
-                    // Format: setoption name <name> value <value>
+                    // TODO parse setoption command
                 } else {
                     try stdout.print("Unknown command: {s}\n", .{command});
                     break;

@@ -233,7 +233,7 @@ pub const Board = struct {
         return b;
     }
 
-    pub inline fn set_pieces(self: *Board, comptime c: Color) Bitboard {
+    pub inline fn set_pieces(self: *const Board, comptime c: Color) Bitboard {
         return if (c == Color.White) 
             self.pieces[Piece.WHITE_PAWN.toU4()] | 
             self.pieces[Piece.WHITE_KNIGHT.toU4()] | 
@@ -250,7 +250,7 @@ pub const Board = struct {
             self.pieces[Piece.BLACK_KING.toU4()];
     }
 
-    pub inline fn set_white(self: *Board) Bitboard {
+    pub inline fn set_white(self: *const Board) Bitboard {
         return self.pieces[Piece.WHITE_PAWN.toU4()] | 
                self.pieces[Piece.WHITE_KNIGHT.toU4()] | 
                self.pieces[Piece.WHITE_BISHOP.toU4()] | 
@@ -259,7 +259,7 @@ pub const Board = struct {
                self.pieces[Piece.WHITE_KING.toU4()];
     }
 
-    pub inline fn set_black(self: *Board) Bitboard {
+    pub inline fn set_black(self: *const Board) Bitboard {
         return self.pieces[Piece.BLACK_PAWN.toU4()] | 
                self.pieces[Piece.BLACK_KNIGHT.toU4()] | 
                self.pieces[Piece.BLACK_BISHOP.toU4()] | 
@@ -274,6 +274,45 @@ pub const Board = struct {
 
     pub fn restore_state(self: *Board, state: BoardState) void {
         state.restore(self);
+    }
+
+    // Get piece type at square
+    pub inline fn get_piece_type_at(self: *const Board, sq: u6) ?PieceType {
+        const bb_mask = @as(u64, 1) << sq;
+     
+        if (self.pieces[@intFromEnum(Piece.WHITE_PAWN)] & bb_mask != 0) return PieceType.Pawn;
+        if (self.pieces[@intFromEnum(Piece.WHITE_KNIGHT)] & bb_mask != 0) return PieceType.Knight;
+        if (self.pieces[@intFromEnum(Piece.WHITE_BISHOP)] & bb_mask != 0) return PieceType.Bishop;
+        if (self.pieces[@intFromEnum(Piece.WHITE_ROOK)] & bb_mask != 0) return PieceType.Rook;
+        if (self.pieces[@intFromEnum(Piece.WHITE_QUEEN)] & bb_mask != 0) return PieceType.Queen;
+        if (self.pieces[@intFromEnum(Piece.WHITE_KING)] & bb_mask != 0) return PieceType.King;
+        
+        if (self.pieces[@intFromEnum(Piece.BLACK_PAWN)] & bb_mask != 0) return PieceType.Pawn;
+        if (self.pieces[@intFromEnum(Piece.BLACK_KNIGHT)] & bb_mask != 0) return PieceType.Knight;
+        if (self.pieces[@intFromEnum(Piece.BLACK_BISHOP)] & bb_mask != 0) return PieceType.Bishop;
+        if (self.pieces[@intFromEnum(Piece.BLACK_ROOK)] & bb_mask != 0) return PieceType.Rook;
+        if (self.pieces[@intFromEnum(Piece.BLACK_QUEEN)] & bb_mask != 0) return PieceType.Queen;
+        if (self.pieces[@intFromEnum(Piece.BLACK_KING)] & bb_mask != 0) return PieceType.King;
+        
+        return null;
+    }
+
+
+    // Get piece at at square
+    pub inline fn get_piece_at(self: *const Board, sq: u6) Piece {
+        inline for (0..12) |i| {
+            if ((self.pieces[i] & (@as(u64, 1) << sq)) != 0) {
+                return @enumFromInt(i);
+            }
+        }
+        return Piece.NO_PIECE;
+    }
+
+    // Get piece color at square
+    pub inline fn get_piece_color_at(self: *const Board, sq: u6) ?Color {
+        const piece = self.get_piece_at(sq);
+        if (piece == Piece.NO_PIECE) return null;
+        return if (@intFromEnum(piece) < 6) Color.White else Color.Black;
     }
 };
 
