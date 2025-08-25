@@ -6,6 +6,7 @@ const util = @import("util.zig");
 const bitboard = @import("bitboard.zig");
 const eval = @import("evaluation.zig");
 const move_generation = @import("move_generation.zig");
+const search = @import("search.zig");
 const print = std.debug.print;
 
 // MVV_LVA table - victim_value[attacker_type]
@@ -35,6 +36,9 @@ const SCORE_PROMOTION = 5000000;
 const SCORE_EQUAL_CAPTURE = 4000000;
 const SCORE_QUIET = 0;
 const SCORE_BAD_CAPTURE = -1000000;
+const SCORE_KILLER = 90000;
+const SCORE_KILLER_2 = 80000;
+const MAX_LOOP_COUNT = 32;
 
 //TODO this can be optimized by using a ScoredMoveList
 pub inline fn get_next_best_move(move_list: *lists.MoveList, score_list: *lists.ScoreList, i: usize) move_generation.Move {
@@ -138,7 +142,20 @@ pub inline fn score_move(board: *types.Board, move_list: *lists.MoveList, score_
         
         //5. Quiet moves gets a score of 0
         else {
-            score = SCORE_QUIET; 
+            // score first killer move
+            if (move_list.moves[i] == search.Search.killer_moves[0][search.Search.ply]) {
+                score = SCORE_KILLER;
+            // score second killer move
+            } else if (move_list.moves[i] == search.killer_moves[1][search.Search.ply]) {
+                score = SCORE_KILLER_2;
+            // score history move
+            } else if (move_list.moves[i] == search.Search.history_moves[move.from][move.to]) { 
+                score = SCORE_QUIET;
+            // score the rest
+            } else {
+                score = SCORE_QUIET;
+            }
+
         }
         score_list.append(score);
     }
@@ -146,113 +163,153 @@ pub inline fn score_move(board: *types.Board, move_list: *lists.MoveList, score_
 
 
 pub fn see(board: *const types.Board, move: move_generation.Move, threshold: i32) bool {
-    const from = move.from;
-    const to = move.to;
-    var side_to_move = if (board.side == types.Color.White) types.Color.Black else types.Color.White;
-
-    // Promotions are always good
+    // Promotions are always considered good
     if (move_generation.Print_move_list.is_promotion(move)) {
         return true;
     }
-    
-    // Get initial material balance
+
+    const from = move.from;
+    const to = move.to;
+
+    // Get the piece being captured
+    const target_piece_type: ?types.PieceType = board.get_piece_type_at(to);
     var value: i32 = 0;
-    const captured_piece_type = board.get_piece_type_at(to);
-    if (captured_piece_type) |victim| {
-        value = PIECE_VALUES[@intFromEnum(victim)];
+
+    if (target_piece_type) |victim| {
+        value = PIECE_VALUES[@intFromEnum(victim)] - threshold;
     } else if (move.flags == types.MoveFlags.EN_PASSANT) {
-        value = PIECE_VALUES[0]; 
+        value = PIECE_VALUES[0] - threshold; // Pawn value
+    } else {
+        return false; // No capture
     }
+
+    if (value < 0) {
+        return false;
+    }
+
+    // Get the attacking piece
+    const attacker_piece_type = board.get_piece_type_at(from) orelse return false;
+    value -= PIECE_VALUES[@intFromEnum(attacker_piece_type)];
+
+    if (value >= 0) {
+        return true;
+    }
+
+    // Set up the board state after the initial capture
+    var occupied = board.pieces_combined() ^ types.squar_bb[from];
     
-    value -= threshold;
-    if (value < 0) return false;
-    
-    // Subtract value of attacking piece
-    const attacker_type = board.get_piece_type_at(from) orelse return false;
-    value -= PIECE_VALUES[@intFromEnum(attacker_type)];
-    
-    if (value >= 0) return true;
-    
-    // Exchange sequence
-    const occ_initial = board.pieces_combined();
-    var occupied = occ_initial ^ types.squar_bb[from]; 
     if (move.flags == types.MoveFlags.EN_PASSANT) {
-        const ep_capture_sq = if (board.side == types.Color.White) to - 8 else to + 8;
+        const ep_capture_sq: u6 = if (board.side == types.Color.White) to - 8 else to + 8;
         occupied ^= types.squar_bb[ep_capture_sq];
     }
-    
+
+    // Get all attackers to the target square
     var attackers = bitboard.get_all_attackers(board, to, occupied);
     
-    // Remove the initial attacker
+    // Remove the initial attacker from the attackers list
     attackers &= ~types.squar_bb[from];
-    
-    
-    while (attackers != 0) {
 
-        // Get attackers for side to move
-        const side_mask = if (side_to_move == types.Color.White) board.set_white() else board.set_black(); 
-        const side_attackers = attackers & side_mask;
-        if (side_attackers == 0) break;      
+    // Get diagonal and orthogonal sliders for x-ray attacks
+    const bishops_queens = (board.pieces[@intFromEnum(types.Piece.WHITE_BISHOP)] | 
+                           board.pieces[@intFromEnum(types.Piece.BLACK_BISHOP)] |
+                           board.pieces[@intFromEnum(types.Piece.WHITE_QUEEN)] | 
+                           board.pieces[@intFromEnum(types.Piece.BLACK_QUEEN)]);
+                           
+    const rooks_queens = (board.pieces[@intFromEnum(types.Piece.WHITE_ROOK)] | 
+                         board.pieces[@intFromEnum(types.Piece.BLACK_ROOK)] |
+                         board.pieces[@intFromEnum(types.Piece.WHITE_QUEEN)] | 
+                         board.pieces[@intFromEnum(types.Piece.BLACK_QUEEN)]);
+
+    var side = if (board.get_piece_color_at(from) == types.Color.White) types.Color.Black else types.Color.White;
+    var loop_count: u8 = 0;
+
+    // Exchange sequence
+    while (attackers != 0 and loop_count < MAX_LOOP_COUNT) {
+        loop_count += 1;
         
-        // Find least valuable attacker
-        var attacker_sq: u6 = undefined;
-        // King value as default
-        var attacker_value: i32 = PIECE_VALUES[5];
+        attackers &= occupied;
+        
+        const side_mask = if (side == types.Color.White) board.set_white() else board.set_black();
+        const my_attackers = attackers & side_mask;
+        
+        if (my_attackers == 0) {
+            break;
+        }
+
+        // Find the least valuable attacker
+        var attacker_sq: u6 = 0;
+        var attacker_piece_val: i32 = PIECE_VALUES[5]; // Default to king value
         var found = false;
-        
-        const pawn_mask = if (side_to_move == types.Color.White)
-            board.pieces[@intFromEnum(types.Piece.WHITE_PAWN)]
-        else
-            board.pieces[@intFromEnum(types.Piece.BLACK_PAWN)];
-            
-        if ((side_attackers & pawn_mask) != 0) {
-            attacker_sq = @intCast(util.lsb_index(side_attackers & pawn_mask));
-            attacker_value = PIECE_VALUES[0];
+
+        // Check for pawns first (least valuable)
+        const pawn_piece = if (side == types.Color.White) types.Piece.WHITE_PAWN else types.Piece.BLACK_PAWN;
+        const pawn_attackers = my_attackers & board.pieces[@intFromEnum(pawn_piece)];
+        if (pawn_attackers != 0) {
+            attacker_sq = @intCast(util.lsb_index(pawn_attackers));
+            attacker_piece_val = PIECE_VALUES[0];
             found = true;
-        } else {
-            const pieces = if (side_to_move == types.Color.White)
+        }
+
+        if (!found) {
+            // Check other pieces in order of value
+            const piece_order = if (side == types.Color.White)
                 [_]types.Piece{ .WHITE_KNIGHT, .WHITE_BISHOP, .WHITE_ROOK, .WHITE_QUEEN, .WHITE_KING }
             else
-                [_]types.Piece{ .BLACK_KNIGHT, .BLACK_BISHOP, .BLACK_ROOK, .BLACK_QUEEN, .BLACK_KING }; 
-            for (pieces, 1..) |piece, piece_val_idx| {
-                if ((side_attackers & board.pieces[@intFromEnum(piece)]) != 0) {
-                    attacker_sq = @intCast(util.lsb_index(side_attackers & board.pieces[@intFromEnum(piece)]));
-                    attacker_value = PIECE_VALUES[piece_val_idx];
+                [_]types.Piece{ .BLACK_KNIGHT, .BLACK_BISHOP, .BLACK_ROOK, .BLACK_QUEEN, .BLACK_KING };
+
+            for (piece_order, 1..) |piece, piece_idx| {
+                const piece_attackers = my_attackers & board.pieces[@intFromEnum(piece)];
+                if (piece_attackers != 0) {
+                    attacker_sq = @intCast(util.lsb_index(piece_attackers));
+                    attacker_piece_val = PIECE_VALUES[piece_idx];
                     found = true;
                     break;
                 }
             }
         }
-        
-        if (!found) break;
-        
-        // Make the capture
-        occupied ^= types.squar_bb[attacker_sq];
-        
-        // Update value (flip perspective)
-        value = -value - 1 - attacker_value;
-        
-        // Prune if this capture wins material
-        if (value >= 0) {
-            // Check for king capture
-            const opp_side_mask = if (side_to_move == types.Color.White)
-                board.set_black()
-            else
-                board.set_white();
-                
-            if ((attackers & opp_side_mask) != 0) {
-                return side_to_move == board.side;
-            }
-            return side_to_move != board.side;
+
+        if (!found) {
+            break;
         }
-        
-        // Update attackers with x-ray attacks
-        attackers = bitboard.get_all_attackers(board, to, occupied);
-        
+
         // Switch sides
-        side_to_move = if (side_to_move == types.Color.White) types.Color.Black else types.Color.White;
+        side = if (side == types.Color.White) types.Color.Black else types.Color.White;
+
+        // Update the value (negamax style)
+        value = -value - 1 - attacker_piece_val;
+
+        // Pruning - if this capture is good enough, stop
+        if (value >= 0) {
+            // Check if the opponent still has attackers
+            const opp_side_mask = if (side == types.Color.White) board.set_white() else board.set_black();
+            if ((attackers & opp_side_mask) != 0) {
+                return side != board.get_piece_color_at(move.from).?;
+            }
+            return side != board.get_piece_color_at(move.from).?;
+        }
+
+        // Remove the attacker from occupied squares
+        occupied ^= types.squar_bb[attacker_sq];
+
+        // Add x-ray attacks if necessary
+        const piece_type = board.get_piece_type_at(attacker_sq);
+        if (piece_type != null) {
+            switch (piece_type.?) {
+                .Pawn, .Bishop, .Queen => {
+                    attackers |= attacks.get_bishop_attacks(to, occupied) & bishops_queens;
+                },
+                .Rook => {
+                    attackers |= attacks.get_rook_attacks(to, occupied) & rooks_queens;
+                },
+                else => {},
+            }
+            
+            if (piece_type.? == .Queen) {
+                attackers |= attacks.get_rook_attacks(to, occupied) & rooks_queens;
+            }
+        }
     }
-    
-    // Return true if the final balance favors the initial side
-    return side_to_move == board.side;
+
+    // Return the final result
+    return side != board.get_piece_color_at(move.from).?;
 }

@@ -1580,7 +1580,7 @@ pub inline fn get_queen_mobility_score(idx: u7) [2]i32 {
 // return the material score of the board
 const material_scores = [_]i32{ 100, 300, 350, 500, 1000, 10000 };
 
-pub inline fn simple_evaluat_material(board: types.Board) i32 {
+pub inline fn simple_evaluat_material(board: *const types.Board) i32 {
     var score: i32 = 0;
 
     inline for (0..6) |i| {

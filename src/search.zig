@@ -5,413 +5,426 @@ const move_generation = @import("move_generation.zig");
 const types = @import("types.zig");
 const bitboard = @import("bitboard.zig");
 const util = @import("util.zig");
-const move_scores = @import("score_moves.zig");
 const print = std.debug.print;
+const move_scores = @import("score_moves.zig");
+const Move = move_generation.Move;
 
-const INFINITY: i32 = 30000;
-const MATE_VALUE: i32 = 29000;
+var global_search: Search = undefined;
 
-// Search state
-var search_nodes: u64 = 0;
-var search_stopped: bool = false;
-var search_timer: std.time.Timer = undefined;
-var search_time_limit: u64 = 0;
-var best_move: move_generation.Move = undefined;
-var best_move_found: bool = false;
-var root_depth: u8 = 0;
-
-inline fn check_time() void {
-    if (search_time_limit > 0 and (search_nodes & 2047) == 0) {
-        const elapsed = search_timer.read() / std.time.ns_per_ms;
-        if (elapsed >= search_time_limit) {
-            search_stopped = true;
-        }
-    }
-}
-
-inline fn is_king_in_check(board: *types.Board, color: types.Color, opponent: types.Color) bool {
-    const king_piece = if (color == types.Color.White) types.Piece.WHITE_KING else types.Piece.BLACK_KING;
-    const king_square: u6 = @intCast(util.lsb_index(board.pieces[@intFromEnum(king_piece)]));
-    return bitboard.is_square_attacked(board, king_square, opponent);
-}
-
-inline fn is_good_capture_eval(board: *types.Board, move: move_generation.Move, comptime color: types.Color) bool {
-    if (board.board[move.to] == types.Piece.NO_PIECE) return false;
-
-    // Evaluate position before the capture
-    const eval_before = eval.global_evaluator.eval(board.*, color);
-
-    // Make the move
-    const board_state = board.save_state();
-    const saved_eval = eval.global_evaluator;
-
-    var is_good = false;
-    if (move_generation.make_move(board, move)) {
-        const eval_after = eval.global_evaluator.eval(board.*, color);
-
-        // Good capture if we improve our position
-        const safety_margin = 50;
-        is_good = eval_after >= eval_before - safety_margin;
-    }
-
-    // Restore position
-    board.restore_state(board_state);
-    eval.global_evaluator = saved_eval;
-
-    return is_good;
-}
-
-// quiescence search_stopped
-fn quiescence(board: *types.Board, alpha_: i32, beta_: i32, comptime color: types.Color, qs_depth: u8) i32 {
-    print("QUIESCENCE: Enter alpha={}, beta={}, nodes={}\n", .{ alpha_, beta_, search_nodes });
-
-    const them = if (color == types.Color.White) types.Color.Black else types.Color.White;
-    var alpha = alpha_;
-    const beta = beta_;
-
-    search_nodes += 1;
-
-    // Check for time limit and stop search
-    check_time();
-    if (search_stopped) {
-        print("QUIESCENCE: Time stopped\n", .{});
-        return 0;
-    }
-
-    if (search_stopped) return 0;
-    print("QUIESCENCE: Enter qs_depth={}\n", .{qs_depth});
-    if (qs_depth >= 4) { // Limit quiescence to 4 ply
-        return eval.global_evaluator.eval(board.*, color);
-    }
-
-    // Check if we are in check
-    const in_check = is_king_in_check(board, color, them);
-
-    // Stand pat evaluation
-    var best_score: i32 = 0;
-    if (!in_check) {
-        const stand_pat = eval.global_evaluator.eval(board.*, color);
-        best_score = stand_pat;
-        // Beta cutoff
-        if (stand_pat >= beta) {
-            return beta;
-        }
-
-        // Update alpha
-        if (stand_pat > alpha) {
-            alpha = stand_pat;
-        }
-
-        // Delta pruning
-        const delta_margin = 900; // queen value
-        if (stand_pat + delta_margin < alpha) {
-            return alpha;
-        }
-    } else {
-        // search all moves if not in check
-        best_score = -INFINITY;
-    }
-
-    var move_list: lists.MoveList = .{};
-
-    if (in_check) {
-        // generate all mves if in check
-        move_generation.generate_moves(board, &move_list, color);
-    } else {
-        // generate only captures if not in check
-        move_generation.generate_capture_moves(board, &move_list, color);
-    }
-
-    // if no moves
-    if (move_list.count == 0) {
-        if (in_check) {
-            // Checkmate
-            return -MATE_VALUE + @as(i32, @intCast(search_nodes & 0xFF));
-        } else {
-            // Stand pat evaluation
-            return best_score;
-        }
-    }
-
-    var score_list: lists.ScoreList = .{};
-    move_scores.score_move(board, &move_list, &score_list);
-
-    // search all moves
-    for (0..move_list.count) |i| {
-        const move = move_scores.get_next_best_move(&move_list, &score_list, i);
-
-        if (!in_check) {
-            if (!move_generation.Print_move_list.is_capture(move) and
-                !move_generation.Print_move_list.is_promotion(move))
-            {
-                continue;
-            }
-        }
-
-        const board_state = board.save_state();
-        const saved_eval = eval.global_evaluator;
-
-        if (move_generation.make_move(board, move)) {
-            const score: i32 = -quiescence(board, -beta, -alpha, them, qs_depth + 1);
-
-            // Unmake move
-            board.restore_state(board_state);
-            eval.global_evaluator = saved_eval;
-
-            if (search_stopped) return 0;
-
-            if (score > best_score) {
-                best_score = score;
-
-                if (score > alpha) {
-                    alpha = score;
-
-                    // Beta cutoff
-                    if (alpha >= beta) {
-                        return beta;
-                    }
-                }
-            }
-        } else {
-            board.restore_state(board_state);
-            eval.global_evaluator = saved_eval;
-        }
-    }
-    print("QUIESCENCE: Exit best_score={}\n", .{best_score});
-
-    return best_score;
-}
-
-// negamax alpha beta search
-pub fn negamax(board: *types.Board, depth_: u8, mut_alpha: i32, beta: i32, comptime color: types.Color) i32 {
-    if (depth_ <= 3) {
-        print("NEGAMAX: Enter depth={}, alpha={}, beta={}, color={}, nodes={}\n", .{ depth_, mut_alpha, beta, color, search_nodes });
-    }
-
-    var alpha = mut_alpha;
-    var best_score: i32 = -INFINITY;
-    var legal_moves: u32 = 0;
-    var best_move_in_position: move_generation.Move = undefined;
-    const depth = depth_;
-
-    const opponent = if (color == types.Color.White) types.Color.Black else types.Color.White;
-
-    check_time();
-
-    if (search_stopped) {
-        if (depth_ <= 3) print("NEGAMAX: Time stopped at depth {}\n", .{depth_});
-        return 0;
-    }
-    if (search_stopped) return 0;
-
-    search_nodes += 1;
-
-    // chek if we are in check
-    const in_check = is_king_in_check(board, color, opponent);
-
-    if (depth_ <= 3) {
-        print("NEGAMAX: In check: {}, depth: {}\n", .{ in_check, depth_ });
-    }
-    // search depper if we are in check
-    var actual_depth = depth;
-    if (depth > 0 and in_check) {
-        actual_depth += 1;
-        if (depth_ <= 3) print("NEGAMAX: Check extension! depth {} -> {}\n", .{ depth, actual_depth });
-    }
-
-    // Terminal node go to quiescence search
-    if (actual_depth == 0) {
-        if (depth_ <= 3) print("NEGAMAX: Going to quiescence\n", .{});
-        return quiescence(board, alpha, beta, color, 0);
-    }
-
-    // Generate moves
-    var move_list: lists.MoveList = .{};
-    move_generation.generate_moves(board, &move_list, color);
-    if (depth_ <= 3) print("NEGAMAX: Generated {} moves\n", .{move_list.count});
-
-    // Generate scored moves
-    var scored_moves: lists.ScoreList = .{};
-    move_scores.score_move(board, &move_list, &scored_moves);
-
-    if (depth_ <= 3) {
-        print("NEGAMAX: Scored moves:\n", .{});
-    }
-    for (0..move_list.count) |i| {
-        if (depth_ <= 3 and i % 5 == 0) {
-            print("NEGAMAX: Processing move {}/{} at depth {}\n", .{ i + 1, move_list.count, depth_ });
-        }
-
-        const move = move_scores.get_next_best_move(&move_list, &scored_moves, i);
-
-        const board_state = board.save_state();
-        const saved_eval = eval.global_evaluator;
-
-        if (move_generation.make_move(board, move)) {
-            legal_moves += 1;
-
-            if (depth_ <= 3) {
-                print("NEGAMAX: Making recursive call for move {} at depth {}\n", .{ i + 1, depth_ });
-            }
-
-            const score = -negamax(board, actual_depth - 1, -beta, -alpha, opponent);
-
-            if (depth_ <= 3) {
-                print("NEGAMAX: Returned from recursive call, score={}\n", .{score});
-            }
-            // Unmake move
-            board.restore_state(board_state);
-            eval.global_evaluator = saved_eval;
-
-            if (search_stopped) return 0;
-            if (search_stopped) {
-                if (depth_ <= 3) print("NEGAMAX: Search stopped during move loop\n", .{});
-                return 0;
-            }
-            if (score > best_score) {
-                best_score = score;
-                best_move_in_position = move;
-
-                if (score > alpha) {
-                    alpha = score;
-
-                    if (depth == root_depth) {
-                        best_move = move;
-                        best_move_found = true;
-                    }
-
-                    // Beta cutoff
-                    if (alpha >= beta) {
-                        if (depth_ <= 3) {
-                            print("NEGAMAX: Beta cutoff at depth {}, move {}\n", .{ depth_, i + 1 });
-                        }
-                        return beta;
-                    }
-                }
-            }
-        } else {
-            board.restore_state(board_state);
-            eval.global_evaluator = saved_eval;
-        }
-    }
-
-    if (depth_ <= 3) {
-        print("NEGAMAX: Finished move loop, legal_moves={}, best_score={}\n", .{ legal_moves, best_score });
-    }
-
-    // Store best move at root
-    if (depth == root_depth and legal_moves > 0 and !best_move_found) {
-        best_move = best_move_in_position;
-        best_move_found = true;
-    }
-
-    // Checkmate/stalemate detection
-    if (legal_moves == 0) {
-        if (in_check) {
-            if (depth_ <= 3) print("NEGAMAX: Checkmate detected\n", .{});
-            // return mate score
-            return -MATE_VALUE + @as(i32, @intCast(root_depth - depth));
-        } else {
-            if (depth_ <= 3) print("NEGAMAX: Stalemate detected\n", .{});
-            // return draw score
-            return 0;
-        }
-    }
-
-    if (depth_ <= 3) {
-        print("NEGAMAX: Exit depth={}, best_score={}\n", .{ depth_, best_score });
-    }
-
-    return best_score;
-}
-
-// Main search function
 pub fn search_position(board: *types.Board, max_depth: ?u8, time_ms: u64, comptime color: types.Color) void {
-    search_nodes = 0;
-    search_stopped = false;
-    search_timer = std.time.Timer.start() catch unreachable;
-    search_time_limit = time_ms;
-    best_move_found = false;
-    var last_score: i32 = 0;
+    global_search.search_position(board, max_depth, time_ms, color);
+}
 
-    const depth_limit = max_depth orelse 10;
+pub fn init_search() void {
+    global_search = Search.new();
+}
 
-    // Iterative deepening
-    var current_depth: u8 = 1;
-    while (current_depth <= depth_limit) : (current_depth += 1) {
-        root_depth = current_depth;
-        print("Starting depth {}\n", .{current_depth});
+const INFINITY: i32 = 50000;
+const MATE_VALUE: i32 = 49000;
+const MAX_PLY: usize = 128;
+const MAX_QUIESCENCE_DEPTH: i8 = 16;
 
-        const start_nodes = search_nodes;
-        const score = negamax(board, current_depth, -INFINITY, INFINITY, color);
-        last_score = score;
+pub const Search = struct {
+    best_move: Move = undefined,
+    stop_on_time: bool = false,
+    stop: bool = false,
+    timer: std.time.Timer = undefined,
+    max_depth: u32 = 64,
+    nodes: u64 = 0,
+    ply: u16 = 0,
 
-        print("=== Completed depth {}, nodes this depth: {} ===\n", .{ current_depth, search_nodes - start_nodes });
+    // PV table
+    pv_length: [MAX_PLY]u16 = undefined,
+    pv_table: [MAX_PLY][MAX_PLY]Move = undefined,
 
-        if (search_stopped) break;
+    // killer moves
+    killer_moves: [2][MAX_PLY]Move = undefined,
+    history_moves: [types.number_of_pieces][types.number_of_squares]Move = undefined,
 
-        const elapsed = search_timer.read() / std.time.ns_per_ms;
+    time_limit: u64 = 0,
 
-        print("info depth {} score cp {} nodes {} time {} ", .{
-            current_depth,
-            score,
-            search_nodes,
-            elapsed,
-        });
+    pub fn new() Search {
+        var search = Search{};
+        search.clear_pv_table();
+        return search;
+    }
 
-        if (best_move_found) {
-            const from = types.SquareString.getSquareToString(@enumFromInt(best_move.from));
-            const to = types.SquareString.getSquareToString(@enumFromInt(best_move.to));
-            print("pv {s}{s}", .{ from, to });
-        }
-        print("\n", .{});
-
-        // if we finde mate search deeper
-        if (@abs(score) >= MATE_VALUE - 100) {
-            break;
+    inline fn clear_pv_table(self: *Search) void {
+        for (0..MAX_PLY) |i| {
+            for (0..MAX_PLY) |j| {
+                self.pv_table[i][j] = move_generation.Move.new(0, 0, types.MoveFlags.QUIET);
+            }
+            self.pv_length[i] = 0;
         }
     }
 
-    if (best_move_found) {
-        const from = types.SquareString.getSquareToString(@enumFromInt(best_move.from));
-        const to = types.SquareString.getSquareToString(@enumFromInt(best_move.to));
-
-        if (move_generation.Print_move_list.is_promotion(best_move)) {
-            const promo = move_generation.Print_move_list.get_promotion_char(best_move);
-            print("bestmove {s}{s}{c}\n", .{ from, to, promo });
+    inline fn update_pv(self: *Search, move: move_generation.Move) void {
+        self.pv_table[self.ply][0] = move;
+        const next_ply = self.ply + 1;
+        if (next_ply < MAX_PLY) {
+            for (0..self.pv_length[next_ply]) |i| {
+                if (i + 1 < MAX_PLY) {
+                    self.pv_table[self.ply][i + 1] = self.pv_table[next_ply][i];
+                }
+            }
+            self.pv_length[self.ply] = self.pv_length[next_ply] + 1;
         } else {
-            print("bestmove {s}{s}\n", .{ from, to });
+            self.pv_length[self.ply] = 1;
         }
-    } else {
-        // Fall back if we didn't find a best move
-        // just fined a legal move
+    }
+
+    inline fn check_time(self: *Search) void {
+        if (self.time_limit > 0 and (self.nodes & 2047) == 0) {
+            const elapsed = self.timer.read() / std.time.ns_per_ms;
+            if (elapsed >= self.time_limit) {
+                self.stop = true;
+            }
+        }
+    }
+
+    // Check if king is in check
+    inline fn is_king_in_check(self: *Search, board: *const types.Board, comptime color: types.Color) bool {
+        _ = self;
+        const king_piece = if (color == types.Color.White) types.Piece.WHITE_KING else types.Piece.BLACK_KING;
+        const opponent = if (color == types.Color.White) types.Color.Black else types.Color.White;
+
+        if (board.pieces[@intFromEnum(king_piece)] == 0) {
+            return false;
+        }
+        const king_square: u6 = @intCast(util.lsb_index(board.pieces[@intFromEnum(king_piece)]));
+        return bitboard.is_square_attacked(board, king_square, opponent);
+    }
+
+    // Quiescence search
+    pub fn quiescence(self: *Search, board: *types.Board, mut_alpha: i32, beta: i32, depth: i8, comptime color: types.Color) i32 {
+        if (self.ply < MAX_PLY) {
+            self.pv_length[self.ply] = 0;
+        }
+
+        if (depth < -MAX_QUIESCENCE_DEPTH) {
+            return eval.global_evaluator.eval(board.*, color);
+        }
+
+        self.nodes += 1;
+        self.check_time();
+
+        if (self.stop) return 0;
+
+        if (self.ply >= MAX_PLY - 1) {
+            return eval.global_evaluator.eval(board.*, color);
+        }
+
+        var alpha = mut_alpha;
+        const opponent = if (color == types.Color.White) types.Color.Black else types.Color.White;
+
+        // Mate distance pruning
+        alpha = @max(alpha, -MATE_VALUE + @as(i32, @intCast(self.ply)));
+        const adj_beta = @min(beta, MATE_VALUE - @as(i32, @intCast(self.ply)) - 1);
+
+        if (alpha >= adj_beta) return alpha;
+
+        // Check if king is in check
+        const in_check = self.is_king_in_check(board, color);
+
+        var best_score: i32 = undefined;
+
+        if (in_check) {
+            // If in check, we must search all moves to escape check
+            best_score = -MATE_VALUE + @as(i32, @intCast(self.ply));
+        } else {
+            // Standing pat - current position evaluation as lower bound
+            best_score = eval.global_evaluator.eval(board.*, color);
+
+            // Standing pat cutoff
+            if (best_score >= beta) {
+                return best_score;
+            }
+
+            // Update alpha with standing pat score
+            if (best_score > alpha) {
+                alpha = best_score;
+            }
+        }
+
+        // Generate moves all moves if in check, only captures otherwise
         var move_list: lists.MoveList = .{};
-        move_generation.generate_moves(board, &move_list, color);
+        if (in_check) {
+            move_generation.generate_moves(board, &move_list, color);
+        } else {
+            move_generation.generate_capture_moves(board, &move_list, color);
+        }
+
+        if (move_list.count == 0 and in_check) {
+            return -MATE_VALUE + @as(i32, @intCast(self.ply));
+        }
+
+        // Score moves for move ordering
+        var score_list: lists.ScoreList = .{};
+        move_scores.score_move(board, &move_list, &score_list);
+
+        const piece_values = [_]i32{ 100, 320, 330, 500, 900, 10000 }; // P, N, B, R, Q, K
 
         for (0..move_list.count) |i| {
-            const move = move_list.moves[i];
+            const move = move_scores.get_next_best_move(&move_list, &score_list, i);
+
+            if (!in_check and move_generation.Print_move_list.is_capture(move) and
+                move.flags != types.MoveFlags.EN_PASSANT)
+            {
+                const attacker_type = board.get_piece_type_at(move.from);
+                const victim_type = board.get_piece_type_at(move.to);
+
+                if (attacker_type != null and victim_type != null) {
+                    const attacker_value = piece_values[@intFromEnum(attacker_type.?)];
+                    const victim_value = piece_values[@intFromEnum(victim_type.?)];
+
+                    // Skip if we're losing material in the most basic sense
+                    // (This is very basic SEE - a proper implementation would be more complex)
+                    if (victim_value < attacker_value - 200) {
+                        continue;
+                    }
+                }
+            }
 
             const board_state = board.save_state();
             const saved_eval = eval.global_evaluator;
 
-            if (move_generation.make_move(board, move)) {
+            self.ply += 1;
+
+            // illegal move - skip to next move
+            if (!move_generation.make_move(board, move)) {
+                self.ply -= 1;
                 board.restore_state(board_state);
                 eval.global_evaluator = saved_eval;
+                continue;
+            }
 
-                const from = types.SquareString.getSquareToString(@enumFromInt(move.from));
-                const to = types.SquareString.getSquareToString(@enumFromInt(move.to));
+            const score = -self.quiescence(board, -adj_beta, -alpha, depth - 1, opponent);
 
-                if (move_generation.Print_move_list.is_promotion(move)) {
-                    const promo = move_generation.Print_move_list.get_promotion_char(move);
-                    print("bestmove {s}{s}{c}\n", .{ from, to, promo });
-                } else {
-                    print("bestmove {s}{s}\n", .{ from, to });
+            self.ply -= 1;
+            board.restore_state(board_state);
+            eval.global_evaluator = saved_eval;
+
+            if (self.stop) return 0;
+
+            // Update best score
+            if (score > best_score) {
+                best_score = score;
+
+                if (score > alpha) {
+                    alpha = score;
+
+                    if (self.ply < MAX_PLY) {
+                        self.update_pv(move);
+                    }
+
+                    if (alpha >= adj_beta) {
+                        return alpha;
+                    }
                 }
-                break;
-            } else {
+            }
+        }
+
+        return best_score;
+    }
+
+    // negamax alpha beta search
+    pub fn negamax(self: *Search, board: *types.Board, depth: u8, mut_alpha: i32, beta: i32, comptime color: types.Color) i32 {
+        // Clear PV length for this ply
+        if (self.ply < MAX_PLY) {
+            self.pv_length[self.ply] = 0;
+        }
+
+        // Quiescence search
+        if (depth == 0) {
+            return self.quiescence(board, mut_alpha, beta, 0, color);
+        }
+
+        self.nodes += 1;
+        self.check_time();
+
+        if (self.stop) return 0;
+
+        var alpha = mut_alpha;
+        var legal_moves: u32 = 0;
+        var best_so_far: move_generation.Move = undefined;
+        const old_alpha = alpha;
+        const is_root = (self.ply == 0);
+        const in_check = self.is_king_in_check(board, color);
+        const opponent = if (color == types.Color.White) types.Color.Black else types.Color.White;
+
+        // Generate moves
+        var move_list: lists.MoveList = .{};
+        move_generation.generate_moves(board, &move_list, color);
+
+        // Generate move scores
+        var score_list: lists.ScoreList = .{};
+        move_scores.score_move(board, &move_list, &score_list);
+
+        // loop over moves within a movelist
+        for (0..move_list.count) |i| {
+            const move = move_scores.get_next_best_move(&move_list, &score_list, i);
+
+            const board_state = board.save_state();
+            const saved_eval = eval.global_evaluator;
+
+            self.ply += 1;
+
+            // illegal move - skip to next move
+            if (!move_generation.make_move(board, move)) {
+                self.ply -= 1;
                 board.restore_state(board_state);
                 eval.global_evaluator = saved_eval;
+                continue;
+            }
+
+            legal_moves += 1;
+
+            const score = -self.negamax(board, depth - 1, -beta, -alpha, opponent);
+
+            self.ply -= 1;
+
+            board.restore_state(board_state);
+            eval.global_evaluator = saved_eval;
+
+            if (self.stop) return 0;
+
+            // fail-hard beta cutoff
+            if (score >= beta) {
+                self.killer_moves[0][self.ply] = move;
+                self.killer_moves[1][self.ply] = move;
+                return beta;
+            }
+
+            // found a better move
+            if (score > alpha) {
+                self.history_moves[move.from][move.to] += depth;
+
+                // PV node (move)
+                alpha = score;
+                best_so_far = move;
+
+                // Update PV
+                if (self.ply < MAX_PLY) {
+                    self.update_pv(move);
+                }
+
+                // if root move
+                if (is_root) {
+                    self.best_move = move;
+                }
+            }
+        }
+
+        // we don't have any legal moves
+        if (legal_moves == 0) {
+            // king is in check
+            if (in_check) {
+                // return mating score
+                return -MATE_VALUE + @as(i32, @intCast(self.ply));
+            } else {
+                // stalemate
+                return 0;
+            }
+        }
+
+        // found better move
+        if (old_alpha != alpha and is_root) {
+            self.best_move = best_so_far;
+        }
+
+        // node fails low
+        return alpha;
+    }
+
+    // Main search function
+    pub fn search_position(self: *Search, board: *types.Board, max_depth: ?u8, time_ms: u64, comptime color: types.Color) void {
+        self.nodes = 0;
+        self.stop = false;
+        self.timer = std.time.Timer.start() catch unreachable;
+        self.time_limit = time_ms;
+        self.ply = 0; // Reset ply counter
+        self.clear_pv_table();
+
+        const depth_limit = max_depth orelse 10;
+
+        // Iterative deepening
+        var current_depth: u8 = 1;
+        while (current_depth <= depth_limit) : (current_depth += 1) {
+            // Reset ply for each iteration
+            self.ply = 0;
+
+            const score = self.negamax(board, current_depth, -INFINITY, INFINITY, color);
+
+            if (self.stop) break;
+
+            const elapsed = self.timer.read() / std.time.ns_per_ms;
+
+            // Print search info
+            print("info depth {} ", .{current_depth});
+
+            // Format and print score
+            if (score > MATE_VALUE - 100) {
+                // Mate in N moves
+                const mate_in = @divTrunc((MATE_VALUE - score + 1), 2);
+                print("score mate {} ", .{mate_in});
+            } else if (score < -MATE_VALUE + 100) {
+                // Getting mated in N moves
+                const mate_in = @divTrunc((MATE_VALUE + score + 1), 2);
+                print("score mate -{} ", .{mate_in});
+            } else {
+                print("score cp {} ", .{score});
+            }
+
+            print("nodes {} time {} ", .{ self.nodes, elapsed });
+
+            // Print principal variation
+            if (self.pv_length[0] > 0) {
+                print("pv ", .{});
+                for (0..self.pv_length[0]) |pv_idx| {
+                    if (pv_idx >= MAX_PLY) break;
+                    const pv_move = self.pv_table[0][pv_idx];
+                    const from = types.SquareString.getSquareToString(@enumFromInt(pv_move.from));
+                    const to = types.SquareString.getSquareToString(@enumFromInt(pv_move.to));
+
+                    if (move_generation.Print_move_list.is_promotion(pv_move)) {
+                        const promo = move_generation.Print_move_list.get_promotion_char(pv_move);
+                        print("{s}{s}{c} ", .{ from, to, promo });
+                    } else {
+                        print("{s}{s} ", .{ from, to });
+                    }
+                }
+            }
+
+            print("\n", .{});
+
+            // Stop if we found a mate
+            if (score > MATE_VALUE - 100 or score < -MATE_VALUE + 100) {
+                break;
+            }
+        }
+
+        // Output best move
+        if (self.pv_length[0] > 0) {
+            const best = self.pv_table[0][0];
+            const from = types.SquareString.getSquareToString(@enumFromInt(best.from));
+            const to = types.SquareString.getSquareToString(@enumFromInt(best.to));
+
+            if (move_generation.Print_move_list.is_promotion(best)) {
+                const promo = move_generation.Print_move_list.get_promotion_char(best);
+                print("bestmove {s}{s}{c}\n", .{ from, to, promo });
+            } else {
+                print("bestmove {s}{s}\n", .{ from, to });
+            }
+        } else {
+            // Fallback - find any legal move
+            var move_list: lists.MoveList = .{};
+            move_generation.generate_moves(board, &move_list, color);
+            if (move_list.count > 0) {
+                const fallback_move = move_list.moves[0];
+                const from = types.SquareString.getSquareToString(@enumFromInt(fallback_move.from));
+                const to = types.SquareString.getSquareToString(@enumFromInt(fallback_move.to));
+                print("bestmove {s}{s}\n", .{ from, to });
             }
         }
     }
-}
+};

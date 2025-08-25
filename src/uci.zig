@@ -210,11 +210,14 @@ pub const UCI = struct {
             }
         }
 
-        // Start search in a separate thread
-        self.search_thread = std.Thread.spawn(.{}, searchWrapper, .{ self, depth, calculated_time }) catch |err| {
-            print("Error starting search thread: {}\n", .{err});
-            return;
-        };
+        // // Start search in a separate thread
+        // self.search_thread = std.Thread.spawn(.{}, searchWrapper, .{ self, depth, calculated_time }) catch |err| {
+        //     print("Error starting search thread: {}\n", .{err});
+        //     return;
+        // };
+        //
+        //
+        searchWrapper(self, depth, calculated_time);
     }
 
     fn searchWrapper(self: *UCI, depth: ?u8, time_ms: u64) void {

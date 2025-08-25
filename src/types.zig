@@ -9,6 +9,9 @@ pub const empty_Bitboard: Bitboard = 0;
 // the number of squares on a chess board
 pub const number_of_squares = 64;
 
+// the number of pieces on a chess board
+pub const number_of_pieces = 12;
+
 // Little endian rank-file (LERF) mapping
 pub const square = enum {
     // zig fmt: off
@@ -299,14 +302,20 @@ pub const Board = struct {
 
 
     // Get piece at at square
-    pub inline fn get_piece_at(self: *const Board, sq: u6) Piece {
-        inline for (0..12) |i| {
-            if ((self.pieces[i] & (@as(u64, 1) << sq)) != 0) {
-                return @enumFromInt(i);
-            }
+   pub inline fn get_piece_at(self: *const Board, sq: u6) Piece {
+    inline for (0..6) |i| {
+        if ((self.pieces[i] & (@as(u64, 1) << sq)) != 0) {
+            return @enumFromInt(i);
         }
-        return Piece.NO_PIECE;
+    } 
+    inline for (8..14) |i| {
+        if ((self.pieces[i] & (@as(u64, 1) << sq)) != 0) {
+            return @enumFromInt(i);
+        }
     }
+    
+    return Piece.NO_PIECE;
+}
 
     // Get piece color at square
     pub inline fn get_piece_color_at(self: *const Board, sq: u6) ?Color {
