@@ -9,7 +9,7 @@ const print = std.debug.print;
 const move_scores = @import("score_moves.zig");
 const Move = move_generation.Move;
 
-var global_search: Search = undefined;
+pub var global_search: Search = undefined;
 
 pub fn search_position(board: *types.Board, max_depth: ?u8, time_ms: u64, comptime color: types.Color) void {
     global_search.search_position(board, max_depth, time_ms, color);
@@ -39,7 +39,6 @@ pub const Search = struct {
 
     // killer moves
     killer_moves: [2][MAX_PLY]Move = undefined,
-    history_moves: [types.number_of_pieces][types.number_of_squares]Move = undefined,
 
     time_limit: u64 = 0,
 
@@ -290,14 +289,15 @@ pub const Search = struct {
 
             // fail-hard beta cutoff
             if (score >= beta) {
-                self.killer_moves[0][self.ply] = move;
-                self.killer_moves[1][self.ply] = move;
+                if (!move_generation.Print_move_list.is_capture(move)) {
+                    self.killer_moves[1][self.ply] = self.killer_moves[0][self.ply];
+                    self.killer_moves[0][self.ply] = move;
+                }
                 return beta;
             }
 
             // found a better move
             if (score > alpha) {
-                self.history_moves[move.from][move.to] += depth;
 
                 // PV node (move)
                 alpha = score;
@@ -310,6 +310,8 @@ pub const Search = struct {
 
                 // if root move
                 if (is_root) {
+                    print("DEBUG: Root level - best_so_far from={} to={}, alpha={}\n", .{ move.from, move.to, alpha });
+                    print("DEBUG: PV[0][0] from={} to={}\n", .{ self.pv_table[0][0].from, self.pv_table[0][0].to });
                     self.best_move = move;
                 }
             }
@@ -344,6 +346,8 @@ pub const Search = struct {
         self.time_limit = time_ms;
         self.ply = 0; // Reset ply counter
         self.clear_pv_table();
+        var best_move_found: ?move_generation.Move = null;
+        var best_completed_depth: u8 = 0;
 
         const depth_limit = max_depth orelse 10;
 
@@ -355,7 +359,17 @@ pub const Search = struct {
 
             const score = self.negamax(board, current_depth, -INFINITY, INFINITY, color);
 
-            if (self.stop) break;
+            // Check if search was interrupted
+            if (self.stop) {
+                print("info string Search interrupted at depth {}\n", .{current_depth});
+                break;
+            }
+
+            // This iteration completed successfully - save the best move
+            if (self.pv_length[0] > 0) {
+                best_move_found = self.pv_table[0][0];
+                best_completed_depth = current_depth;
+            }
 
             const elapsed = self.timer.read() / std.time.ns_per_ms;
 
@@ -401,22 +415,30 @@ pub const Search = struct {
             if (score > MATE_VALUE - 100 or score < -MATE_VALUE + 100) {
                 break;
             }
+
+            // Simple time management - don't start new iteration if we've used too much time
+            if (self.time_limit > 0 and elapsed > self.time_limit / 2) {
+                print("info string Time management: stopping after depth {} (used {}ms of {}ms)\n", .{ current_depth, elapsed, self.time_limit });
+                break;
+            }
         }
 
         // Output best move
-        if (self.pv_length[0] > 0) {
-            const best = self.pv_table[0][0];
-            const from = types.SquareString.getSquareToString(@enumFromInt(best.from));
-            const to = types.SquareString.getSquareToString(@enumFromInt(best.to));
+        if (best_move_found) |best_move| {
+            const from = types.SquareString.getSquareToString(@enumFromInt(best_move.from));
+            const to = types.SquareString.getSquareToString(@enumFromInt(best_move.to));
 
-            if (move_generation.Print_move_list.is_promotion(best)) {
-                const promo = move_generation.Print_move_list.get_promotion_char(best);
+            print("info string Using best move from completed depth {}\n", .{best_completed_depth});
+
+            if (move_generation.Print_move_list.is_promotion(best_move)) {
+                const promo = move_generation.Print_move_list.get_promotion_char(best_move);
                 print("bestmove {s}{s}{c}\n", .{ from, to, promo });
             } else {
                 print("bestmove {s}{s}\n", .{ from, to });
             }
         } else {
             // Fallback - find any legal move
+            print("ERROR: Using fallback move - no completed iterations\n", .{});
             var move_list: lists.MoveList = .{};
             move_generation.generate_moves(board, &move_list, color);
             if (move_list.count > 0) {

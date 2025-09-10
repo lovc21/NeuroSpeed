@@ -143,19 +143,18 @@ pub inline fn score_move(board: *types.Board, move_list: *lists.MoveList, score_
         //5. Quiet moves gets a score of 0
         else {
             // score first killer move
-            if (move_list.moves[i] == search.Search.killer_moves[0][search.Search.ply]) {
+            if (std.meta.eql(move_list.moves[i] ,search.global_search.killer_moves[0][search.global_search.ply])) {
                 score = SCORE_KILLER;
             // score second killer move
-            } else if (move_list.moves[i] == search.killer_moves[1][search.Search.ply]) {
+            } else if (std.meta.eql(move_list.moves[i],search.global_search.killer_moves[1][search.global_search.ply])) {
                 score = SCORE_KILLER_2;
             // score history move
-            } else if (move_list.moves[i] == search.Search.history_moves[move.from][move.to]) { 
-                score = SCORE_QUIET;
+            // } else if (std.meta.eql(move_list.moves[i],search.global_search.history_moves[move.from][move.to])) { 
+            //     score = SCORE_QUIET;
             // score the rest
             } else {
                 score = SCORE_QUIET;
             }
-
         }
         score_list.append(score);
     }
