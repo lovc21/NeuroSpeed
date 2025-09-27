@@ -40,11 +40,15 @@ pub const Search = struct {
     // killer moves
     killer_moves: [2][MAX_PLY]Move = undefined,
 
+    // history moves
+    history_moves: [64][64]i32 = undefined,
+
     time_limit: u64 = 0,
 
     pub fn new() Search {
         var search = Search{};
         search.clear_pv_table();
+        @memset(&search.history_moves, 0);
         return search;
     }
 
@@ -292,6 +296,8 @@ pub const Search = struct {
                 if (!move_generation.Print_move_list.is_capture(move)) {
                     self.killer_moves[1][self.ply] = self.killer_moves[0][self.ply];
                     self.killer_moves[0][self.ply] = move;
+
+                    self.history_moves[move.from][move.to] += depth * depth;
                 }
                 return beta;
             }

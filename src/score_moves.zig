@@ -137,7 +137,7 @@ pub inline fn score_move(board: *types.Board, move_list: *lists.MoveList, score_
         // 4. Castling
         else if (move.flags == types.MoveFlags.OO or move.flags == types.MoveFlags.OOO) {
             // Better than quiet moves
-            score = 100000;         
+            score = 100000;
         }
         
         //5. Quiet moves gets a score of 0
@@ -149,11 +149,8 @@ pub inline fn score_move(board: *types.Board, move_list: *lists.MoveList, score_
             } else if (std.meta.eql(move_list.moves[i],search.global_search.killer_moves[1][search.global_search.ply])) {
                 score = SCORE_KILLER_2;
             // score history move
-            // } else if (std.meta.eql(move_list.moves[i],search.global_search.history_moves[move.from][move.to])) { 
-            //     score = SCORE_QUIET;
-            // score the rest
-            } else {
-                score = SCORE_QUIET;
+            } else{ 
+                score = search.global_search.history_moves[move.from][move.to];
             }
         }
         score_list.append(score);
