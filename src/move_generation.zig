@@ -16,6 +16,14 @@ pub const Move = struct {
     pub inline fn new(from: u6, to: u6, flags: types.MoveFlags) Move {
         return Move{ .from = from, .to = to, .flags = flags };
     }
+
+    pub inline fn is_empty(self: Move) bool {
+        return self.from == 0 and self.to == 0 and self.flags == types.MoveFlags.QUIET;
+    }
+
+    pub inline fn empty() Move {
+        return Move{ .from = 0, .to = 0, .flags = types.MoveFlags.QUIET };
+    }
 };
 
 // Print move list

@@ -8,6 +8,7 @@ const eval = @import("evaluation.zig");
 const move_generation = @import("move_generation.zig");
 const search = @import("search.zig");
 const print = std.debug.print;
+const move_gen = @import("move_generation.zig");
 
 // MVV_LVA table - victim_value[attacker_type]
 pub const MVV_LVA = [6][6]i32{
@@ -39,6 +40,7 @@ const SCORE_BAD_CAPTURE = -1000000;
 const SCORE_KILLER = 90000;
 const SCORE_KILLER_2 = 80000;
 const MAX_LOOP_COUNT = 32;
+const SCORE_PV_MOVE = 10000000;
 
 //TODO this can be optimized by using a ScoredMoveList
 pub inline fn get_next_best_move(move_list: *lists.MoveList, score_list: *lists.ScoreList, i: usize) move_generation.Move {
@@ -79,13 +81,17 @@ pub inline fn get_next_best_move(move_list: *lists.MoveList, score_list: *lists.
     return move_list.moves[i];
 }
 
-pub inline fn score_move(board: *types.Board, move_list: *lists.MoveList, score_list: *lists.ScoreList) void {
+pub inline fn score_move(board: *types.Board, move_list: *lists.MoveList, score_list: *lists.ScoreList,pv_move: move_gen.Move) void {
     score_list.count = 0;
     
     for (0..move_list.count) |i| {
         const move = move_list.moves[i];
         var score: i32 = 0;
-        
+       
+        if (!pv_move.is_empty() and moves_equal(move, pv_move)) {
+            score = SCORE_PV_MOVE;
+        }
+
         // 1. Promotions with capture
         if (move_generation.Print_move_list.is_promotion(move) and move_generation.Print_move_list.is_capture(move)) {
             if (move.flags == types.MoveFlags.PC_QUEEN) {
@@ -308,4 +314,8 @@ pub fn see(board: *const types.Board, move: move_generation.Move, threshold: i32
 
     // Return the final result
     return side != board.get_piece_color_at(move.from).?;
+}
+
+inline fn moves_equal(m1: move_gen.Move, m2: move_gen.Move) bool {
+    return m1.from == m2.from and m1.to == m2.to and m1.flags == m2.flags;
 }

@@ -161,9 +161,14 @@ pub const Search = struct {
             return -MATE_VALUE + @as(i32, @intCast(self.ply));
         }
 
+        const pv_move = if (self.pv_length[self.ply] > 0)
+            self.pv_table[self.ply][0]
+        else
+            move_generation.Move.empty();
+
         // Score moves for move ordering
         var score_list: lists.ScoreList = .{};
-        move_scores.score_move(board, &move_list, &score_list);
+        move_scores.score_move(board, &move_list, &score_list, pv_move);
 
         const piece_values = [_]i32{ 100, 320, 330, 500, 900, 10000 }; // P, N, B, R, Q, K
 
@@ -259,9 +264,14 @@ pub const Search = struct {
         var move_list: lists.MoveList = .{};
         move_generation.generate_moves(board, &move_list, color);
 
+        const pv_move = if (self.pv_length[self.ply] > 0)
+            self.pv_table[self.ply][0]
+        else
+            move_generation.Move.empty();
+
         // Generate move scores
         var score_list: lists.ScoreList = .{};
-        move_scores.score_move(board, &move_list, &score_list);
+        move_scores.score_move(board, &move_list, &score_list, pv_move);
 
         // loop over moves within a movelist
         for (0..move_list.count) |i| {
