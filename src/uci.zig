@@ -220,6 +220,70 @@ pub const UCI = struct {
         searchWrapper(self, depth, calculated_time);
     }
 
+    fn run_bench(self: *UCI, stdout: anytype) !void {
+        // Benchmark positions (use diverse positions)
+        const bench_positions = [_][]const u8{
+            "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+            "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1",
+            "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1",
+            "rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8",
+        };
+
+        var total_nodes: u64 = 0;
+        const start_time = std.time.milliTimestamp();
+
+        // Run perft depth 5 on each position
+        for (bench_positions) |fen| {
+            // Parse position
+            try bitboard.fan_pars(fen, &self.board);
+
+            // Run perft (you'll need to modify perft to return nodes)
+            const nodes = self.count_nodes(5);
+            total_nodes += nodes;
+        }
+
+        const end_time = std.time.milliTimestamp();
+        const elapsed_ms = @as(u64, @intCast(end_time - start_time));
+        const elapsed_s = @as(f64, @floatFromInt(elapsed_ms)) / 1000.0;
+        const nps: u64 = if (elapsed_s > 0) @intFromFloat(@as(f64, @floatFromInt(total_nodes)) / elapsed_s) else total_nodes;
+
+        // CRITICAL: Output in EXACTLY this format for OpenBench
+        try stdout.print("Nodes: {d}\n", .{total_nodes});
+        try stdout.print("NPS: {d}\n", .{nps});
+    }
+
+    // Helper function to count nodes (wrapper around perft)
+    fn count_nodes(self: *UCI, depth: u8) u64 {
+        if (depth == 0) return 1;
+
+        var move_list: lists.MoveList = .{};
+        var nodes: u64 = 0;
+
+        if (self.board.side == types.Color.White) {
+            move_gen.generate_moves(&self.board, &move_list, types.Color.White);
+        } else {
+            move_gen.generate_moves(&self.board, &move_list, types.Color.Black);
+        }
+
+        for (0..move_list.count) |i| {
+            var board_copy = self.board;
+            _ = move_gen.make_move(&board_copy, move_list.moves[i]);
+
+            var temp_uci = UCI{
+                .board = board_copy,
+                .allocator = self.allocator,
+                .is_searching = false,
+                .stop_search = false,
+                .search_thread = null,
+            };
+
+            nodes += temp_uci.count_nodes(depth - 1);
+        }
+
+        return nodes;
+    }
+
     fn searchWrapper(self: *UCI, depth: ?u8, time_ms: u64) void {
         if (self.board.side == types.Color.White) {
             search.search_position(&self.board, depth, time_ms, types.Color.White);
@@ -282,8 +346,8 @@ pub const UCI = struct {
                     }
 
                     util.perft_test_detailed(&self.board, depth);
-                } else if (std.mem.eql(u8, command, "setoption")) {
-                    // TODO parse setoption command
+                } else if (std.mem.eql(u8, command, "bench")) {
+                    try self.run_bench(stdout);
                 } else {
                     try stdout.print("Unknown command: {s}\n", .{command});
                     break;
