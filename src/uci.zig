@@ -239,7 +239,7 @@ pub const UCI = struct {
             try bitboard.fan_pars(fen, &self.board);
 
             // Run perft (you'll need to modify perft to return nodes)
-            const nodes = self.count_nodes(5);
+            const nodes = self.count_nodes(4);
             total_nodes += nodes;
         }
 
