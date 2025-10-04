@@ -1,27 +1,13 @@
-.PHONY: all
-all: build
+.DEFAULT_GOAL := default
 
-.PHONY: build
-build:
-	zig build --release=fast -Dcpu=x86_64
+ifndef EXE
+EXE=NeuroSpeed
+endif
 
-$(EXE):
+default:
 	zig build --release=fast -Dcpu=x86_64
-	@if [ -f "zig-out/bin/NeuroSpeed" ]; then \
-		cp zig-out/bin/NeuroSpeed $(EXE); \
-	else \
-		echo "Build failed!"; \
-		exit 1; \
-	fi
+	mv ./zig-out/bin/NeuroSpeed $(EXE)
 
 .PHONY: clean
 clean:
 	rm -rf zig-out zig-cache
-
-.PHONY: help
-help:
-	@echo "Makefile targets:"
-	@echo "  all      - Build the engine (default)"
-	@echo "  build    - Build the engine"
-	@echo "  clean    - Remove build artifacts"
-	@echo "  help     - Show this help message"
