@@ -7,6 +7,7 @@ const move_gen = @import("move_generation.zig");
 const print = std.debug.print;
 const search = @import("search.zig");
 const lists = @import("lists.zig");
+const eval = @import("evaluation.zig");
 
 const UCI_COMMANDS_MAX: usize = 10000;
 const VERSION: []const u8 = "0.1";
@@ -267,6 +268,9 @@ pub const UCI = struct {
         }
 
         for (0..move_list.count) |i| {
+            // Save evaluator state before making move
+            const saved_evaluator = eval.global_evaluator;
+
             var board_copy = self.board;
             _ = move_gen.make_move(&board_copy, move_list.moves[i]);
 
@@ -279,6 +283,9 @@ pub const UCI = struct {
             };
 
             nodes += temp_uci.count_nodes(depth - 1);
+
+            // Restore evaluator state after recursive call
+            eval.global_evaluator = saved_evaluator;
         }
 
         return nodes;

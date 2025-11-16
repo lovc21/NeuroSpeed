@@ -235,7 +235,8 @@ pub const Search = struct {
         return best_score;
     }
 
-    // negamax alpha beta search
+    // negamax alpha beta search with PVS (Principal Variation Search)
+    // PVS optimizes search by using null-window searches for non-PV nodes
     pub fn negamax(self: *Search, board: *types.Board, depth: u8, mut_alpha: i32, beta: i32, comptime color: types.Color) i32 {
         // Clear PV length for this ply
         if (self.ply < MAX_PLY) {
@@ -259,6 +260,7 @@ pub const Search = struct {
         const is_root = (self.ply == 0);
         const in_check = self.is_king_in_check(board, color);
         const opponent = if (color == types.Color.White) types.Color.Black else types.Color.White;
+        var found_pv: bool = false; // Track if we found a PV move
 
         // Generate moves
         var move_list: lists.MoveList = .{};
@@ -292,7 +294,23 @@ pub const Search = struct {
 
             legal_moves += 1;
 
-            const score = -self.negamax(board, depth - 1, -beta, -alpha, opponent);
+            // PVS (Principal Variation Search)
+            var score: i32 = undefined;
+
+            if (found_pv) {
+                // PVS: After the first move (PV node), search with null window
+                // to prove remaining moves are worse
+                score = -self.negamax(board, depth - 1, -alpha - 1, -alpha, opponent);
+
+                // If the null window search failed high (score > alpha),
+                // we need to do a full re-search with the normal window
+                if (score > alpha and score < beta) {
+                    score = -self.negamax(board, depth - 1, -beta, -alpha, opponent);
+                }
+            } else {
+                // First move or when we haven't found PV yet - use full window
+                score = -self.negamax(board, depth - 1, -beta, -alpha, opponent);
+            }
 
             self.ply -= 1;
 
@@ -319,6 +337,9 @@ pub const Search = struct {
                 alpha = score;
                 best_so_far = move;
 
+                // Enable PVS for subsequent moves
+                found_pv = true;
+
                 // Update PV
                 if (self.ply < MAX_PLY) {
                     self.update_pv(move);
@@ -326,8 +347,6 @@ pub const Search = struct {
 
                 // if root move
                 if (is_root) {
-                    print("DEBUG: Root level - best_so_far from={} to={}, alpha={}\n", .{ move.from, move.to, alpha });
-                    print("DEBUG: PV[0][0] from={} to={}\n", .{ self.pv_table[0][0].from, self.pv_table[0][0].to });
                     self.best_move = move;
                 }
             }
@@ -454,7 +473,7 @@ pub const Search = struct {
             }
         } else {
             // Fallback - find any legal move
-            print("ERROR: Using fallback move - no completed iterations\n", .{});
+            print("info string Using fallback move - no completed iterations\n", .{});
             var move_list: lists.MoveList = .{};
             move_generation.generate_moves(board, &move_list, color);
             if (move_list.count > 0) {

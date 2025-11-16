@@ -207,6 +207,7 @@ pub fn fan_pars(fen: []const u8, board: *types.Board) !void {
 
     // Reset the board
     @memset(board.pieces[0..], 0);
+    @memset(board.board[0..], types.Piece.NO_PIECE);
     // Reset the global evaluator
     eval.global_evaluator = eval.Evaluat.init_empty();
 
@@ -242,6 +243,9 @@ pub fn fan_pars(fen: []const u8, board: *types.Board) !void {
         const sq_idx = (7 - rank) * 8 + file;
         const piece_index: usize = @intCast(@intFromEnum(pe));
         board.pieces[piece_index] |= (@as(u64, 1) << @intCast(sq_idx));
+
+        // Update mailbox
+        board.board[sq_idx] = pe;
 
         // Update phase for this piece
         eval.global_evaluator.put_piece_phase(pe);

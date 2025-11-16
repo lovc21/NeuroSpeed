@@ -168,6 +168,7 @@ pub const black_casteling_betweenOOO: Bitboard = 0xe00000000000000;
 
 pub const BoardState = struct {
     pieces: [Board.PieceCount]Bitboard,
+    board: [64]Piece,
     side: Color,
     enpassant: square,
     castle: u8,
@@ -175,6 +176,7 @@ pub const BoardState = struct {
     pub fn save(board: *const Board) BoardState {
         return BoardState{
             .pieces = board.pieces,
+            .board = board.board,
             .side = board.side,
             .enpassant = board.enpassant,
             .castle = board.castle,
@@ -183,6 +185,7 @@ pub const BoardState = struct {
 
     pub fn restore(self: BoardState, board: *Board) void {
         board.pieces = self.pieces;
+        board.board = self.board;
         board.side = self.side;
         board.enpassant = self.enpassant;
         board.castle = self.castle;
