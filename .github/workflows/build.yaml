@@ -5,8 +5,6 @@ on:
   push:
     tags:
        - 'v[0-9]+.[0-9]+.[0-9]+'
-    branches:
-      - main
 
 
 jobs:
@@ -17,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - id: set-matrix
-        run: echo "matrix=$(cat .github/build-matrix.json | jq -c .)" >> $GITHUB_OUTPUT
+        run: echo "matrix=$(cat .github/workflows/build-matrix.json | jq -c .)" >> $GITHUB_OUTPUT
   build:
     needs: generate-matrix  
     strategy:
