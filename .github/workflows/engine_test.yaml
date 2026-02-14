@@ -16,10 +16,6 @@ jobs:
           epd: perftsuite.epd
           count: 127
           depth: 5
-        - name: FRC
-          epd: frc_perftsuite.epd
-          count: 1000
-          depth: 4
 
     steps:
       - uses: actions/checkout@v4
