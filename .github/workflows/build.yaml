@@ -72,7 +72,7 @@ jobs:
           if [[ "${{ matrix.target }}" == *"windows"* ]]; then
             cp "$BINARY_PATH" "dist/NeuroSpeed.exe"
             cd dist
-            zip "../${ARCHIVE_NAME}.zip" NeuroSpeed.exe
+            7z a "../${ARCHIVE_NAME}.zip" NeuroSpeed.exe
             cd ..
             echo "ASSET_PATH=${ARCHIVE_NAME}.zip" >> $GITHUB_ENV
           else
