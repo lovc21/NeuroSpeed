@@ -26,17 +26,54 @@ This chess engine is still in development. When I have it in working order and w
 
 ## Features
 
-  These are the features that were implemented so far:
+These are the features that were implemented so far:
 
-    Bitboard board representation 
-    Pre-calculated attack tables 
-    Magic bitboards
+```
+Bitboard board representation (LERF mapping)
+Pre-calculated attack tables
+Magic bitboards for sliding piece attacks
+Negamax alpha-beta search
+PVS
+Quiescence search
+Iterative deepening
+Mate distance pruning
+Delta pruning in quiescence
+Check extensions in quiescence
+PV move ordering
+MVV-LVA
+Static Exchange Evaluation
+Killer move heuristic
+History heuristic
+Tapered evaluation
+Piece-square tables
+Material evaluation
+Pawn structure
+Piece mobility
+King safety
+Threat evaluation
+Bishop pair bonus
+Bad bishop penalty
+Knight outpost bonus
+Knight on rim penalty
+Rook on open/semi-open file bonus
+Rook on 7th rank bonus
+Tempo bonus
+KBN vs K corner mating and king distance
+Insufficient material draw detection
+```
 
 ## How to Build
 
-**TODO:**
+Requires [Zig](https://ziglang.org/download/) (0.14+) and [just](https://github.com/casey/just).
 
-- Add a "How to Build" section
+```bash
+# Build optimized binary for your machine
+just build
+
+# Build and run the engine in fast mode
+just start
+
+```
 
 ## Thanks and Acknowledgements
 

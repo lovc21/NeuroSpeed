@@ -24,6 +24,7 @@ pub const UCI = struct {
     // new uci
     pub fn new(allocator: std.mem.Allocator) UCI {
         attacks.init_attacks();
+        search.init_search();
         var board = types.Board.new();
         bitboard.fan_pars(types.start_position, &board) catch {
             print("Error parsing fen in the new uci function\n", .{});

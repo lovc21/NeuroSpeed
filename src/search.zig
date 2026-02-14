@@ -48,8 +48,19 @@ pub const Search = struct {
     pub fn new() Search {
         var search = Search{};
         search.clear_pv_table();
-        @memset(&search.history_moves, 0);
+        search.clear_killer_moves();
+        for (&search.history_moves) |*row| {
+            @memset(row, 0);
+        }
         return search;
+    }
+
+    inline fn clear_killer_moves(self: *Search) void {
+        const empty = move_generation.Move.empty();
+        for (0..MAX_PLY) |i| {
+            self.killer_moves[0][i] = empty;
+            self.killer_moves[1][i] = empty;
+        }
     }
 
     inline fn clear_pv_table(self: *Search) void {
@@ -139,7 +150,7 @@ pub const Search = struct {
             best_score = eval.global_evaluator.eval(board.*, color);
 
             // Standing pat cutoff
-            if (best_score >= beta) {
+            if (best_score >= adj_beta) {
                 return best_score;
             }
 
@@ -325,7 +336,7 @@ pub const Search = struct {
                     self.killer_moves[1][self.ply] = self.killer_moves[0][self.ply];
                     self.killer_moves[0][self.ply] = move;
 
-                    self.history_moves[move.from][move.to] += depth * depth;
+                    self.history_moves[move.from][move.to] += @as(i32, depth) * @as(i32, depth);
                 }
                 return beta;
             }
@@ -384,7 +395,7 @@ pub const Search = struct {
         var best_move_found: ?move_generation.Move = null;
         var best_completed_depth: u8 = 0;
 
-        const depth_limit = max_depth orelse 10;
+        const depth_limit = max_depth orelse 64;
 
         // Iterative deepening
         var current_depth: u8 = 1;
@@ -476,11 +487,21 @@ pub const Search = struct {
             print("info string Using fallback move - no completed iterations\n", .{});
             var move_list: lists.MoveList = .{};
             move_generation.generate_moves(board, &move_list, color);
-            if (move_list.count > 0) {
-                const fallback_move = move_list.moves[0];
-                const from = types.SquareString.getSquareToString(@enumFromInt(fallback_move.from));
-                const to = types.SquareString.getSquareToString(@enumFromInt(fallback_move.to));
-                print("bestmove {s}{s}\n", .{ from, to });
+            for (0..move_list.count) |fi| {
+                const board_state = board.save_state();
+                const saved_eval = eval.global_evaluator;
+                if (move_generation.make_move(board, move_list.moves[fi])) {
+                    board.restore_state(board_state);
+                    eval.global_evaluator = saved_eval;
+                    const fallback_move = move_list.moves[fi];
+                    const from = types.SquareString.getSquareToString(@enumFromInt(fallback_move.from));
+                    const to = types.SquareString.getSquareToString(@enumFromInt(fallback_move.to));
+                    print("bestmove {s}{s}\n", .{ from, to });
+                    break;
+                } else {
+                    board.restore_state(board_state);
+                    eval.global_evaluator = saved_eval;
+                }
             }
         }
     }

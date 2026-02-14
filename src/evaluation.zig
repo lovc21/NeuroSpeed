@@ -1288,12 +1288,12 @@ pub const Evaluat = struct {
         const black_king_safety_final = @divTrunc((black_danger_score + black_shelter_penalty) * danger_multipliers[@min(black_danger_pieces, 7)], 100);
 
         if (white_king_safety_final > 0) {
-            king_score[0] += white_king_safety_final;
-            king_score[1] += white_king_safety_final;
+            king_score[0] -= white_king_safety_final;
+            king_score[1] -= white_king_safety_final;
         }
         if (black_king_safety_final > 0) {
-            king_score[0] -= black_king_safety_final;
-            king_score[1] -= black_king_safety_final;
+            king_score[0] += black_king_safety_final;
+            king_score[1] += black_king_safety_final;
         }
 
         // Bishop pair bonus
