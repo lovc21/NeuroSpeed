@@ -71,12 +71,6 @@
       "target": "x86_64-macos",
       "cpu": null,
       "name": "macOS Intel"
-    },
-    {
-      "os": "ubuntu-latest",
-      "target": "wasm32-wasi",
-      "cpu": null,
-      "name": "WASI"
     }
   ]
 }

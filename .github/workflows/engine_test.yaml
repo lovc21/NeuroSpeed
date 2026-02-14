@@ -1,10 +1,9 @@
-name: CI
+name: Perft
 
-on: 
+on:
   push:
     branches:
       - main
-
 
 jobs:
 
@@ -32,22 +31,32 @@ jobs:
       - name: Build engine
         run: zig build
 
-      # - name: Perft ${{ matrix.suites.name }}
-      #   run: |
-      #     echo 0 > COUNTER.tmp
-      #     wget -O- https://raw.githubusercontent.com/TerjeKir/EngineTests/master/testfiles/${{ matrix.suites.epd }} | while read p; do
-      #       echo $(($(cat COUNTER.tmp) + 1)) > COUNTER.tmp
-      #       echo "$(cat COUNTER.tmp): $p"
-      #       expected=$(echo $p | grep -Po '(?<=;D'${{ matrix.suites.depth }}' )[0-9]+?(?= )')
-      #       actual=$(echo "perft ${{ matrix.suites.depth }} $p" | ./zig-out/bin/your-engine-name | grep -Po '(?<=Nodes: )[0-9]+?(?=$)')
-      #       if [[ $actual != $expected ]]; then 
-      #         echo "Expected $expected was $actual" 
-      #         exit 1
-      #       fi
-      #     done
-      #     if [[ $(cat COUNTER.tmp) != ${{ matrix.suites.count }} ]]; then
-      #       echo "Expected ${{ matrix.suites.count }} positions was $(cat COUNTER.tmp)" 
-      #       exit 1
-      #     else 
-      #       echo "${{ matrix.suites.count }}/$(cat COUNTER.tmp) positions done."
-      #     fi
+      - name: Perft ${{ matrix.suites.name }}
+        run: |
+          COUNTER=0
+          FAILED=0
+          wget -q -O suite.epd https://raw.githubusercontent.com/TerjeKir/EngineTests/master/testfiles/${{ matrix.suites.epd }}
+          while IFS= read -r line || [ -n "$line" ]; do
+            fen=$(echo "$line" | sed 's/ ;.*//')
+            expected=$(echo "$line" | grep -oP "(?<=;D${{ matrix.suites.depth }} )\d+")
+            if [ -z "$expected" ]; then
+              continue
+            fi
+            COUNTER=$((COUNTER + 1))
+            actual=$(printf "position fen %s\nperft %s\nquit\n" "$fen" "${{ matrix.suites.depth }}" | ./zig-out/bin/NeuroSpeed 2>&1 | awk '/^Nodes:/{print $NF}' | head -1)
+            if [ "$actual" != "$expected" ]; then
+              echo "FAIL $COUNTER: $fen -> Expected: $expected, Got: $actual"
+              FAILED=$((FAILED + 1))
+            else
+              echo "OK $COUNTER: $fen -> $actual"
+            fi
+          done < suite.epd
+          if [ $FAILED -ne 0 ]; then
+            echo "$FAILED/$COUNTER positions failed!"
+            exit 1
+          fi
+          if [ $COUNTER -ne ${{ matrix.suites.count }} ]; then
+            echo "Expected ${{ matrix.suites.count }} positions but found $COUNTER"
+            exit 1
+          fi
+          echo "All $COUNTER/${{ matrix.suites.count }} positions passed!"

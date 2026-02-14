@@ -30,10 +30,10 @@ jobs:
           version: "0.14.0"
       
       - name: Build engine
-        shell: bash  
-        run: | 
+        shell: bash
+        run: |
           mkdir -p dist
-          
+
           if [ "${{ matrix.cpu }}" != "null" ] && [ -n "${{ matrix.cpu }}" ]; then
             echo "Building for target: ${{ matrix.target }} with CPU: ${{ matrix.cpu }}"
             zig build -Dtarget=${{ matrix.target }} -Dcpu=${{ matrix.cpu }} -Doptimize=ReleaseFast
@@ -41,24 +41,34 @@ jobs:
             echo "Building for target: ${{ matrix.target }} (baseline)"
             zig build -Dtarget=${{ matrix.target }} -Doptimize=ReleaseFast
           fi
-          
+
           if [[ "${{ matrix.target }}" == *"windows"* ]]; then
             BINARY_EXT=".exe"
           else
             BINARY_EXT=""
           fi
-          
+
+          # Extract version from tag (v1.0.0 -> 1.0.0), empty if no tag
+          VERSION=""
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          fi
+
           TARGET_ARCH=$(echo "${{ matrix.target }}" | cut -d'-' -f1)
           TARGET_OS=$(echo "${{ matrix.target }}" | cut -d'-' -f2)
-          
-          if [ "${{ matrix.cpu }}" != "null" ] && [ -n "${{ matrix.cpu }}" ]; then
-            ARCHIVE_NAME="NeuroSpeed-${TARGET_ARCH}-${TARGET_OS}-${{ matrix.cpu }}"
+
+          if [ -n "$VERSION" ]; then
+            ARCHIVE_NAME="NeuroSpeed-${VERSION}-${TARGET_ARCH}-${TARGET_OS}"
           else
             ARCHIVE_NAME="NeuroSpeed-${TARGET_ARCH}-${TARGET_OS}"
           fi
-          
+
+          if [ "${{ matrix.cpu }}" != "null" ] && [ -n "${{ matrix.cpu }}" ]; then
+            ARCHIVE_NAME="${ARCHIVE_NAME}-${{ matrix.cpu }}"
+          fi
+
           BINARY_PATH="zig-out/bin/NeuroSpeed${BINARY_EXT}"
- 
+
           if [[ "${{ matrix.target }}" == *"windows"* ]]; then
             cp "$BINARY_PATH" "dist/NeuroSpeed.exe"
             cd dist
@@ -72,7 +82,7 @@ jobs:
             cd ..
             echo "ASSET_PATH=${ARCHIVE_NAME}.tar.gz" >> $GITHUB_ENV
           fi
-          
+
           echo "ASSET_NAME=${ARCHIVE_NAME}" >> $GITHUB_ENV
       
       - name: Upload build artifacts
@@ -128,9 +138,6 @@ jobs:
             - `NeuroSpeed-aarch64-macos.tar.gz` - Apple Silicon (generic)
             - `NeuroSpeed-aarch64-macos-apple_m1.tar.gz` - Optimized for M1
             - `NeuroSpeed-aarch64-macos-apple_m2.tar.gz` - Optimized for M2
-            
-            **WebAssembly:**
-            - `NeuroSpeed-wasm32-wasi.tar.gz` - WASI runtime
           draft: false
           prerelease: false
       
