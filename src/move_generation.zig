@@ -16,6 +16,14 @@ pub const Move = struct {
     pub inline fn new(from: u6, to: u6, flags: types.MoveFlags) Move {
         return Move{ .from = from, .to = to, .flags = flags };
     }
+
+    pub inline fn is_empty(self: Move) bool {
+        return self.from == 0 and self.to == 0 and self.flags == types.MoveFlags.QUIET;
+    }
+
+    pub inline fn empty() Move {
+        return Move{ .from = 0, .to = 0, .flags = types.MoveFlags.QUIET };
+    }
 };
 
 // Print move list
@@ -500,6 +508,153 @@ inline fn handle_castling(board: *types.Board, target_square: u6, side: types.Co
             board.pieces[@intFromEnum(rook_piece)] = util.set_bit(board.pieces[@intFromEnum(rook_piece)], types.square.d8);
         },
         else => {},
+    }
+}
+
+// Generate capture moves
+pub inline fn generate_capture_moves(board: *types.Board, list: *lists.MoveList, comptime color: types.Color) void {
+    const us = color;
+    const them = if (us == types.Color.White) types.Color.Black else types.Color.White;
+    const us_bb: u64 = board.set_pieces(us);
+    const them_bb: u64 = board.set_pieces(them);
+    const occ = us_bb | them_bb;
+
+    // Pawn captures and promotions
+    const pawn_piece = if (us == types.Color.White) types.Piece.WHITE_PAWN else types.Piece.BLACK_PAWN;
+    var b: u64 = board.pieces[@intFromEnum(pawn_piece)];
+
+    while (b != 0) {
+        const from_idx = util.lsb_index(b);
+        const from: u6 = @intCast(from_idx);
+        b &= b - 1;
+        const from_bb = types.squar_bb[from];
+
+        // Pawn captures
+        const cap_bb = attacks.pawn_attacks_from_square(from, us) & them_bb;
+        var c: u64 = cap_bb;
+        while (c != 0) {
+            const to_idx = util.lsb_index(c);
+            const to: u6 = @intCast(to_idx);
+            c &= c - 1;
+
+            // Check for promotion captures
+            if ((types.squar_bb[to] & types.mask_rank[if (us == types.Color.White) 7 else 0]) != 0) {
+                list.append(Move.new(from, to, types.MoveFlags.PC_QUEEN));
+                list.append(Move.new(from, to, types.MoveFlags.PC_ROOK));
+                list.append(Move.new(from, to, types.MoveFlags.PC_BISHOP));
+                list.append(Move.new(from, to, types.MoveFlags.PC_KNIGHT));
+            } else {
+                list.append(Move.new(from, to, types.MoveFlags.CAPTURE));
+            }
+        }
+
+        // Pawn promotions (non-captures)
+        const dir: u64 = if (us == types.Color.White) from_bb << 8 else from_bb >> 8;
+        if ((dir & occ) == 0) {
+            const to_idx = util.lsb_index(dir);
+            const to: u6 = @intCast(to_idx);
+
+            // Check for promotion
+            if ((dir & types.mask_rank[if (us == types.Color.White) 7 else 0]) != 0) {
+                list.append(Move.new(from, to, types.MoveFlags.PR_QUEEN));
+                list.append(Move.new(from, to, types.MoveFlags.PR_ROOK));
+                list.append(Move.new(from, to, types.MoveFlags.PR_BISHOP));
+                list.append(Move.new(from, to, types.MoveFlags.PR_KNIGHT));
+            }
+        }
+
+        // En passant captures
+        if (board.enpassant != types.square.NO_SQUARE) {
+            const ep_sq: u6 = @intCast(@intFromEnum(board.enpassant));
+            const ep_bb = types.squar_bb[ep_sq];
+            if ((attacks.pawn_attacks_from_square(from, us) & ep_bb) != 0) {
+                list.append(Move.new(from, ep_sq, types.MoveFlags.EN_PASSANT));
+            }
+        }
+    }
+
+    // Knight captures
+    const knight_piece = if (us == types.Color.White) types.Piece.WHITE_KNIGHT else types.Piece.BLACK_KNIGHT;
+    b = board.pieces[@intFromEnum(knight_piece)];
+    while (b != 0) {
+        const from_idx = util.lsb_index(b);
+        const from: u6 = @intCast(from_idx);
+        b &= b - 1;
+
+        const knight_attacks = attacks.piece_attacks(from, occ, types.PieceType.Knight);
+        var capture_targets = knight_attacks & them_bb;
+        while (capture_targets != 0) {
+            const to: u6 = @intCast(util.lsb_index(capture_targets));
+            list.append(Move.new(from, to, types.MoveFlags.CAPTURE));
+            capture_targets &= capture_targets - 1;
+        }
+    }
+
+    // Bishop captures
+    const bishop_piece = if (us == types.Color.White) types.Piece.WHITE_BISHOP else types.Piece.BLACK_BISHOP;
+    b = board.pieces[@intFromEnum(bishop_piece)];
+    while (b != 0) {
+        const from_idx = util.lsb_index(b);
+        const from: u6 = @intCast(from_idx);
+        b &= b - 1;
+
+        const bishop_attacks_bb = attacks.get_bishop_attacks(from, occ);
+        var capture_targets = bishop_attacks_bb & them_bb;
+        while (capture_targets != 0) {
+            const to: u6 = @intCast(util.lsb_index(capture_targets));
+            list.append(Move.new(from, to, types.MoveFlags.CAPTURE));
+            capture_targets &= capture_targets - 1;
+        }
+    }
+
+    // Rook captures
+    const rook_piece = if (us == types.Color.White) types.Piece.WHITE_ROOK else types.Piece.BLACK_ROOK;
+    b = board.pieces[@intFromEnum(rook_piece)];
+    while (b != 0) {
+        const from_idx = util.lsb_index(b);
+        const from: u6 = @intCast(from_idx);
+        b &= b - 1;
+
+        const rook_attacks_bb = attacks.get_rook_attacks(from, occ);
+        var capture_targets = rook_attacks_bb & them_bb;
+        while (capture_targets != 0) {
+            const to: u6 = @intCast(util.lsb_index(capture_targets));
+            list.append(Move.new(from, to, types.MoveFlags.CAPTURE));
+            capture_targets &= capture_targets - 1;
+        }
+    }
+
+    // Queen captures
+    const queen_piece = if (us == types.Color.White) types.Piece.WHITE_QUEEN else types.Piece.BLACK_QUEEN;
+    b = board.pieces[@intFromEnum(queen_piece)];
+    while (b != 0) {
+        const from_idx = util.lsb_index(b);
+        const from: u6 = @intCast(from_idx);
+        b &= b - 1;
+
+        const queen_attacks_bb = attacks.get_queen_attacks(from, occ);
+        var capture_targets = queen_attacks_bb & them_bb;
+        while (capture_targets != 0) {
+            const to: u6 = @intCast(util.lsb_index(capture_targets));
+            list.append(Move.new(from, to, types.MoveFlags.CAPTURE));
+            capture_targets &= capture_targets - 1;
+        }
+    }
+
+    // King captures
+    const king_piece = if (us == types.Color.White) types.Piece.WHITE_KING else types.Piece.BLACK_KING;
+    b = board.pieces[@intFromEnum(king_piece)];
+    if (b != 0) {
+        const from_idx = util.lsb_index(b);
+        const from: u6 = @intCast(from_idx);
+
+        const king_attacks_bb = attacks.piece_attacks(from, occ, types.PieceType.King);
+        var capture_targets = king_attacks_bb & them_bb;
+        while (capture_targets != 0) {
+            const to: u6 = @intCast(util.lsb_index(capture_targets));
+            list.append(Move.new(from, to, types.MoveFlags.CAPTURE));
+            capture_targets &= capture_targets - 1;
+        }
     }
 }
 

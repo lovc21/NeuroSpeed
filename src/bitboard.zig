@@ -207,6 +207,7 @@ pub fn fan_pars(fen: []const u8, board: *types.Board) !void {
 
     // Reset the board
     @memset(board.pieces[0..], 0);
+    @memset(board.board[0..], types.Piece.NO_PIECE);
     // Reset the global evaluator
     eval.global_evaluator = eval.Evaluat.init_empty();
 
@@ -242,6 +243,9 @@ pub fn fan_pars(fen: []const u8, board: *types.Board) !void {
         const sq_idx = (7 - rank) * 8 + file;
         const piece_index: usize = @intCast(@intFromEnum(pe));
         board.pieces[piece_index] |= (@as(u64, 1) << @intCast(sq_idx));
+
+        // Update mailbox
+        board.board[sq_idx] = pe;
 
         // Update phase for this piece
         eval.global_evaluator.put_piece_phase(pe);
@@ -283,4 +287,36 @@ pub fn fan_pars(fen: []const u8, board: *types.Board) !void {
     } else {
         return FenError.InvalidEnPassant;
     }
+}
+
+pub inline fn get_all_attackers(board: *const types.Board, square: u6, occupied: u64) u64 {
+    var attackers: u64 = 0;
+
+    const white_pawn_attacks = attacks.pawn_attacks_from_square(square, types.Color.Black);
+    attackers |= white_pawn_attacks & board.pieces[@intFromEnum(types.Piece.WHITE_PAWN)];
+
+    const black_pawn_attacks = attacks.pawn_attacks_from_square(square, types.Color.White);
+    attackers |= black_pawn_attacks & board.pieces[@intFromEnum(types.Piece.BLACK_PAWN)];
+
+    const knight_attacks = attacks.piece_attacks(square, occupied, types.PieceType.Knight);
+    attackers |= knight_attacks & (board.pieces[@intFromEnum(types.Piece.WHITE_KNIGHT)] |
+        board.pieces[@intFromEnum(types.Piece.BLACK_KNIGHT)]);
+
+    const bishop_attacks = attacks.get_bishop_attacks(square, occupied);
+    attackers |= bishop_attacks & (board.pieces[@intFromEnum(types.Piece.WHITE_BISHOP)] |
+        board.pieces[@intFromEnum(types.Piece.BLACK_BISHOP)] |
+        board.pieces[@intFromEnum(types.Piece.WHITE_QUEEN)] |
+        board.pieces[@intFromEnum(types.Piece.BLACK_QUEEN)]);
+
+    const rook_attacks = attacks.get_rook_attacks(square, occupied);
+    attackers |= rook_attacks & (board.pieces[@intFromEnum(types.Piece.WHITE_ROOK)] |
+        board.pieces[@intFromEnum(types.Piece.BLACK_ROOK)] |
+        board.pieces[@intFromEnum(types.Piece.WHITE_QUEEN)] |
+        board.pieces[@intFromEnum(types.Piece.BLACK_QUEEN)]);
+
+    const king_attacks = attacks.piece_attacks(square, occupied, types.PieceType.King);
+    attackers |= king_attacks & (board.pieces[@intFromEnum(types.Piece.WHITE_KING)] |
+        board.pieces[@intFromEnum(types.Piece.BLACK_KING)]);
+
+    return attackers;
 }

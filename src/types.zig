@@ -9,6 +9,9 @@ pub const empty_Bitboard: Bitboard = 0;
 // the number of squares on a chess board
 pub const number_of_squares = 64;
 
+// the number of pieces on a chess board
+pub const number_of_pieces = 12;
+
 // Little endian rank-file (LERF) mapping
 pub const square = enum {
     // zig fmt: off
@@ -165,6 +168,7 @@ pub const black_casteling_betweenOOO: Bitboard = 0xe00000000000000;
 
 pub const BoardState = struct {
     pieces: [Board.PieceCount]Bitboard,
+    board: [64]Piece,
     side: Color,
     enpassant: square,
     castle: u8,
@@ -172,6 +176,7 @@ pub const BoardState = struct {
     pub fn save(board: *const Board) BoardState {
         return BoardState{
             .pieces = board.pieces,
+            .board = board.board,
             .side = board.side,
             .enpassant = board.enpassant,
             .castle = board.castle,
@@ -180,6 +185,7 @@ pub const BoardState = struct {
 
     pub fn restore(self: BoardState, board: *Board) void {
         board.pieces = self.pieces;
+        board.board = self.board;
         board.side = self.side;
         board.enpassant = self.enpassant;
         board.castle = self.castle;
@@ -233,7 +239,7 @@ pub const Board = struct {
         return b;
     }
 
-    pub inline fn set_pieces(self: *Board, comptime c: Color) Bitboard {
+    pub inline fn set_pieces(self: *const Board, comptime c: Color) Bitboard {
         return if (c == Color.White) 
             self.pieces[Piece.WHITE_PAWN.toU4()] | 
             self.pieces[Piece.WHITE_KNIGHT.toU4()] | 
@@ -250,7 +256,7 @@ pub const Board = struct {
             self.pieces[Piece.BLACK_KING.toU4()];
     }
 
-    pub inline fn set_white(self: *Board) Bitboard {
+    pub inline fn set_white(self: *const Board) Bitboard {
         return self.pieces[Piece.WHITE_PAWN.toU4()] | 
                self.pieces[Piece.WHITE_KNIGHT.toU4()] | 
                self.pieces[Piece.WHITE_BISHOP.toU4()] | 
@@ -259,7 +265,7 @@ pub const Board = struct {
                self.pieces[Piece.WHITE_KING.toU4()];
     }
 
-    pub inline fn set_black(self: *Board) Bitboard {
+    pub inline fn set_black(self: *const Board) Bitboard {
         return self.pieces[Piece.BLACK_PAWN.toU4()] | 
                self.pieces[Piece.BLACK_KNIGHT.toU4()] | 
                self.pieces[Piece.BLACK_BISHOP.toU4()] | 
@@ -274,6 +280,51 @@ pub const Board = struct {
 
     pub fn restore_state(self: *Board, state: BoardState) void {
         state.restore(self);
+    }
+
+    // Get piece type at square
+    pub inline fn get_piece_type_at(self: *const Board, sq: u6) ?PieceType {
+        const bb_mask = @as(u64, 1) << sq;
+     
+        if (self.pieces[@intFromEnum(Piece.WHITE_PAWN)] & bb_mask != 0) return PieceType.Pawn;
+        if (self.pieces[@intFromEnum(Piece.WHITE_KNIGHT)] & bb_mask != 0) return PieceType.Knight;
+        if (self.pieces[@intFromEnum(Piece.WHITE_BISHOP)] & bb_mask != 0) return PieceType.Bishop;
+        if (self.pieces[@intFromEnum(Piece.WHITE_ROOK)] & bb_mask != 0) return PieceType.Rook;
+        if (self.pieces[@intFromEnum(Piece.WHITE_QUEEN)] & bb_mask != 0) return PieceType.Queen;
+        if (self.pieces[@intFromEnum(Piece.WHITE_KING)] & bb_mask != 0) return PieceType.King;
+        
+        if (self.pieces[@intFromEnum(Piece.BLACK_PAWN)] & bb_mask != 0) return PieceType.Pawn;
+        if (self.pieces[@intFromEnum(Piece.BLACK_KNIGHT)] & bb_mask != 0) return PieceType.Knight;
+        if (self.pieces[@intFromEnum(Piece.BLACK_BISHOP)] & bb_mask != 0) return PieceType.Bishop;
+        if (self.pieces[@intFromEnum(Piece.BLACK_ROOK)] & bb_mask != 0) return PieceType.Rook;
+        if (self.pieces[@intFromEnum(Piece.BLACK_QUEEN)] & bb_mask != 0) return PieceType.Queen;
+        if (self.pieces[@intFromEnum(Piece.BLACK_KING)] & bb_mask != 0) return PieceType.King;
+        
+        return null;
+    }
+
+
+    // Get piece at at square
+   pub inline fn get_piece_at(self: *const Board, sq: u6) Piece {
+    inline for (0..6) |i| {
+        if ((self.pieces[i] & (@as(u64, 1) << sq)) != 0) {
+            return @enumFromInt(i);
+        }
+    } 
+    inline for (8..14) |i| {
+        if ((self.pieces[i] & (@as(u64, 1) << sq)) != 0) {
+            return @enumFromInt(i);
+        }
+    }
+    
+    return Piece.NO_PIECE;
+}
+
+    // Get piece color at square
+    pub inline fn get_piece_color_at(self: *const Board, sq: u6) ?Color {
+        const piece = self.get_piece_at(sq);
+        if (piece == Piece.NO_PIECE) return null;
+        return if (@intFromEnum(piece) < 6) Color.White else Color.Black;
     }
 };
 

@@ -1,0 +1,82 @@
+{
+  "include": [
+    {
+      "os": "windows-latest",
+      "target": "x86_64-windows",
+      "cpu": null,
+      "name": "Windows x86_64"
+    },
+    {
+      "os": "windows-latest",
+      "target": "x86_64-windows",
+      "cpu": "x86_64_v3",
+      "name": "Windows x86_64 v3"
+    },
+    {
+      "os": "windows-latest",
+      "target": "x86_64-windows",
+      "cpu": "znver3",
+      "name": "Windows AMD Zen 3"
+    },
+    {
+      "os": "ubuntu-latest",
+      "target": "x86_64-linux",
+      "cpu": null,
+      "name": "Linux x86_64"
+    },
+    {
+      "os": "ubuntu-latest",
+      "target": "x86_64-linux",
+      "cpu": "x86_64_v3",
+      "name": "Linux x86_64 v3"
+    },
+    {
+      "os": "ubuntu-latest",
+      "target": "aarch64-linux",
+      "cpu": null,
+      "name": "Linux ARM64"
+    },
+    {
+      "os": "ubuntu-latest",
+      "target": "aarch64-linux",
+      "cpu": "cortex_a76",
+      "name": "Linux Cortex-A76"
+    },
+    {
+      "os": "ubuntu-latest",
+      "target": "aarch64-linux",
+      "cpu": "neoverse_n1",
+      "name": "Linux Neoverse N1"
+    },
+    {
+      "os": "macos-latest",
+      "target": "aarch64-macos",
+      "cpu": null,
+      "name": "macOS ARM64"
+    },
+    {
+      "os": "macos-latest",
+      "target": "aarch64-macos",
+      "cpu": "apple_m1",
+      "name": "macOS Apple M1"
+    },
+    {
+      "os": "macos-latest",
+      "target": "aarch64-macos",
+      "cpu": "apple_m2",
+      "name": "macOS Apple M2"
+    },
+    {
+      "os": "macos-latest",
+      "target": "x86_64-macos",
+      "cpu": null,
+      "name": "macOS Intel"
+    },
+    {
+      "os": "ubuntu-latest",
+      "target": "wasm32-wasi",
+      "cpu": null,
+      "name": "WASI"
+    }
+  ]
+}

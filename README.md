@@ -26,74 +26,52 @@ This chess engine is still in development. When I have it in working order and w
 
 ## Features
 
-  These are the features that were implemented so far:
+These are the features that were implemented so far:
 
 ```
-
-  Board Representation:
-  - Bitboard board representation
-  - Pre-calculated attack tables
-  - Magic bitboards
-  - Hybrid mailbox for piece lookup
-  - Compact 16-bit move encoding
-
-  Move Generation:
-  - Pseudo-legal move generation
-  - Separate capture move generation
-  - All special moves (en passant, castling, promotions)
-  - Comptime color specialization
-
-  Search:
-  - Negamax with alpha-beta pruning
-  - Principal Variation Search (PVS)
-  - Iterative deepening
-  - Quiescence search
-  - Principal Variation (PV) table
-  - Mate distance pruning
-
-  Move Ordering:
-  - PV move ordering
-  - MVV-LVA (Most Valuable Victim - Least Valuable Attacker)
-  - Killer move heuristic (2 killers per ply)
-  - History heuristic
-  - Incremental move sorting
-
-  Evaluation:
-  - Material counting (incremental)
-  - Piece-Square Tables (PST) - middlegame/endgame tapered
-  - Passed pawns
-  - Isolated pawns
-  - Doubled pawns
-  - Pawn chains
-  - Pawn phalanx
-  - Piece mobility (knights, bishops, rooks, queens)
-  - King safety (pawn shelter, attacking pieces)
-  - Outpost detection
-  - Bishop pair bonus
-  - Bad bishop penalty
-  - Rook on open/semi-open files
-  - Rook on 7th/2nd rank
-  - Threat evaluation
-  - Insufficient material detection
-  - Special KBN vs K endgame evaluation
-  - Game phase calculation (opening/middlegame/endgame)
-
-  Time Management:
-  - Fixed depth search
-  - Fixed time search (movetime)
-  - Time controls with increment (wtime/btime/winc/binc)
-  - Simple time allocation
-
-  UCI Protocol:
-  - Full UCI compliance
-  - Threaded search
-  - FEN parsing
-  - Move parsing
-  - Perft testing
-  - OpenBench-compatible benchmark
+Bitboard board representation (LERF mapping)
+Pre-calculated attack tables
+Magic bitboards for sliding piece attacks
+Negamax alpha-beta search
+PVS
+Quiescence search
+Iterative deepening
+Mate distance pruning
+Delta pruning in quiescence
+Check extensions in quiescence
+PV move ordering
+MVV-LVA
+Static Exchange Evaluation
+Killer move heuristic
+History heuristic
+Tapered evaluation
+Piece-square tables
+Material evaluation
+Pawn structure
+Piece mobility
+King safety
+Threat evaluation
+Bishop pair bonus
+Bad bishop penalty
+Knight outpost bonus
+Knight on rim penalty
+Rook on open/semi-open file bonus
+Rook on 7th rank bonus
+Tempo bonus
+KBN vs K corner mating and king distance
+Insufficient material draw detection
 ```
 
-## Engine development
+Requires [Zig](https://ziglang.org/download/) (0.14+) and [just](https://github.com/casey/just).
+
+```bash
+# Build optimized binary for your machine
+just build
+
+# Build and run the engine in fast mode
+just start
+
+```
 
 ## Thanks and Acknowledgements
 

@@ -7,6 +7,7 @@ const move_gen = @import("move_generation.zig");
 const print = std.debug.print;
 const search = @import("search.zig");
 const lists = @import("lists.zig");
+const eval = @import("evaluation.zig");
 
 const UCI_COMMANDS_MAX: usize = 10000;
 const VERSION: []const u8 = "0.1";
@@ -23,6 +24,7 @@ pub const UCI = struct {
     // new uci
     pub fn new(allocator: std.mem.Allocator) UCI {
         attacks.init_attacks();
+        search.init_search();
         var board = types.Board.new();
         bitboard.fan_pars(types.start_position, &board) catch {
             print("Error parsing fen in the new uci function\n", .{});
@@ -53,11 +55,10 @@ pub const UCI = struct {
 
         // Generate legal moves to find the matching move
         var move_list: lists.MoveList = .{};
-        if (self.board.side == types.Color.White) {
-            move_gen.generate_moves(&self.board, &move_list, types.Color.White);
-        } else {
+        if (self.board.side == types.Color.White)
+            move_gen.generate_moves(&self.board, &move_list, types.Color.White)
+        else
             move_gen.generate_moves(&self.board, &move_list, types.Color.Black);
-        }
 
         // Find matching move
         for (0..move_list.count) |i| {
@@ -85,7 +86,7 @@ pub const UCI = struct {
     // Parse a position command
     fn parse_position(self: *UCI, command: []const u8) !void {
         var tokens = std.mem.tokenizeScalar(u8, command, ' ');
-        _ = tokens.next(); // Skip "position"
+        _ = tokens.next();
 
         const position_type = tokens.next() orelse return;
 
@@ -132,7 +133,7 @@ pub const UCI = struct {
     // parse go
     fn parse_go(self: *UCI, command: []const u8) void {
         var tokens = std.mem.tokenizeScalar(u8, command, ' ');
-        _ = tokens.next(); // Skip "go"
+        _ = tokens.next();
 
         var depth: ?u8 = null;
         var movetime: ?u64 = null;
@@ -211,12 +212,92 @@ pub const UCI = struct {
             }
         }
 
-        // Start search in a separate thread
-        self.search_thread = std.Thread.spawn(.{}, searchWrapper, .{ self, depth, calculated_time }) catch null;
+        // // Start search in a separate thread
+        // self.search_thread = std.Thread.spawn(.{}, searchWrapper, .{ self, depth, calculated_time }) catch |err| {
+        //     print("Error starting search thread: {}\n", .{err});
+        //     return;
+        // };
+        //
+        //
+        searchWrapper(self, depth, calculated_time);
+    }
+
+    fn run_bench(self: *UCI, stdout: anytype) !void {
+        // Benchmark positions (use diverse positions)
+        const bench_positions = [_][]const u8{
+            "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+            "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1",
+            "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1",
+            "rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8",
+        };
+
+        var total_nodes: u64 = 0;
+        const start_time = std.time.milliTimestamp();
+
+        // Run perft depth 5 on each position
+        for (bench_positions) |fen| {
+            // Parse position
+            try bitboard.fan_pars(fen, &self.board);
+
+            // Run perft (you'll need to modify perft to return nodes)
+            const nodes = self.count_nodes(4);
+            total_nodes += nodes;
+        }
+
+        const end_time = std.time.milliTimestamp();
+        const elapsed_ms = @as(u64, @intCast(end_time - start_time));
+        const elapsed_s = @as(f64, @floatFromInt(elapsed_ms)) / 1000.0;
+        const nps: u64 = if (elapsed_s > 0) @intFromFloat(@as(f64, @floatFromInt(total_nodes)) / elapsed_s) else total_nodes;
+
+        // CRITICAL: Output in EXACTLY this format for OpenBench
+        try stdout.print("Nodes: {d}\n", .{total_nodes});
+        try stdout.print("NPS: {d}\n", .{nps});
+    }
+
+    // Helper function to count nodes (wrapper around perft)
+    fn count_nodes(self: *UCI, depth: u8) u64 {
+        if (depth == 0) return 1;
+
+        var move_list: lists.MoveList = .{};
+        var nodes: u64 = 0;
+
+        if (self.board.side == types.Color.White) {
+            move_gen.generate_moves(&self.board, &move_list, types.Color.White);
+        } else {
+            move_gen.generate_moves(&self.board, &move_list, types.Color.Black);
+        }
+
+        for (0..move_list.count) |i| {
+            // Save evaluator state before making move
+            const saved_evaluator = eval.global_evaluator;
+
+            var board_copy = self.board;
+            _ = move_gen.make_move(&board_copy, move_list.moves[i]);
+
+            var temp_uci = UCI{
+                .board = board_copy,
+                .allocator = self.allocator,
+                .is_searching = false,
+                .stop_search = false,
+                .search_thread = null,
+            };
+
+            nodes += temp_uci.count_nodes(depth - 1);
+
+            // Restore evaluator state after recursive call
+            eval.global_evaluator = saved_evaluator;
+        }
+
+        return nodes;
     }
 
     fn searchWrapper(self: *UCI, depth: ?u8, time_ms: u64) void {
-        search.search_position(self, depth, time_ms);
+        if (self.board.side == types.Color.White) {
+            search.search_position(&self.board, depth, time_ms, types.Color.White);
+        } else {
+            search.search_position(&self.board, depth, time_ms, types.Color.Black);
+        }
     }
     // main loop
     pub fn uci_loop(self: *UCI) !void {
@@ -267,27 +348,19 @@ pub const UCI = struct {
                     // Debug command to display board
                     bitboard.print_unicode_board(self.board);
                 } else if (std.mem.eql(u8, command, "perft")) {
-                    // Perft command for testing
-                    // var depth: u8 = 1;
-                    // if (tokens.next()) |depth_str| {
-                    //     depth = std.fmt.parseUnsigned(u8, depth_str, 10) catch 1;
-                    // }
-                    //
-                    // const nodes = if (self.board.side == types.Color.White)
-                    //     util.perft(types.Color.White, &self.board, depth)
-                    // else
-                    //     util.perft(types.Color.Black, &self.board, depth);
-                    //
-                    // try stdout.print("Nodes searched: {d}\n", .{nodes});
-                } else if (std.mem.eql(u8, command, "setoption")) {
-                    // Parse setoption command (currently just ignore)
-                    // Format: setoption name <name> value <value>
-                    // You can implement option handling here
+                    var depth: u8 = 1;
+                    if (tokens.next()) |depth_str| {
+                        depth = std.fmt.parseUnsigned(u8, depth_str, 10) catch 1;
+                    }
+
+                    util.perft_test_detailed(&self.board, depth);
+                } else if (std.mem.eql(u8, command, "bench")) {
+                    try self.run_bench(stdout);
                 } else {
-                    // Unknown command - ignore as per UCI spec
+                    try stdout.print("Unknown command: {s}\n", .{command});
+                    break;
                 }
             } else |err| {
-                // Handle read error
                 print("Error reading input: {}\n", .{err});
                 break;
             }
