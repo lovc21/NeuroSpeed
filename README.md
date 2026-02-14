@@ -62,6 +62,8 @@ KBN vs K corner mating and king distance
 Insufficient material draw detection
 ```
 
+## How to build
+
 Requires [Zig](https://ziglang.org/download/) (0.14+) and [just](https://github.com/casey/just).
 
 ```bash
