@@ -475,6 +475,8 @@ pub const Evaluat = struct {
         var king_score = [_]i32{ 0, 0 };
         var additional_material_score = [_]i32{ 0, 0 };
         var mobility_score = [_]i32{ 0, 0 };
+        var white_passed_bb: u64 = 0;
+        var black_passed_bb: u64 = 0;
 
         // check if pawn is passed
         const isPassedPawn = struct {
@@ -576,7 +578,9 @@ pub const Evaluat = struct {
             }
 
             // Passed pawn evaluation
-            if (isPassedPawn(sq, types.Color.White, black_pawns, white_pawns)) {
+            const is_passed_w = isPassedPawn(sq, types.Color.White, black_pawns, white_pawns);
+            if (is_passed_w) {
+                white_passed_bb |= types.squar_bb[sq];
                 var tmp_sc = get_passed_pawn_score(sq);
                 pawn_structure_score[0] += tmp_sc[0];
                 pawn_structure_score[1] += tmp_sc[1];
@@ -590,15 +594,24 @@ pub const Evaluat = struct {
             }
 
             // Pawn is supported?
-            if ((white_pawn_attacks & types.squar_bb[sq]) != 0) {
+            const is_supported_w = (white_pawn_attacks & types.squar_bb[sq]) != 0;
+            if (is_supported_w) {
                 const tmp_sc = get_supported_pawn_bonus(rank);
                 pawn_structure_score[0] += tmp_sc[0];
                 pawn_structure_score[1] += tmp_sc[1];
             }
 
             // Pawn phalanx (adjacent pawns on same rank)
-            if (file < 7 and (white_pawns & types.squar_bb[sq + 1]) != 0) {
+            const has_phalanx_w = file < 7 and (white_pawns & types.squar_bb[sq + 1]) != 0;
+            if (has_phalanx_w) {
                 const tmp_sc = get_phalanx_score(rank);
+                pawn_structure_score[0] += tmp_sc[0];
+                pawn_structure_score[1] += tmp_sc[1];
+            }
+
+            // Connected passed pawn bonus: passed + supported or phalanx
+            if (is_passed_w and (is_supported_w or has_phalanx_w)) {
+                const tmp_sc = get_connected_passer_bonus(rank);
                 pawn_structure_score[0] += tmp_sc[0];
                 pawn_structure_score[1] += tmp_sc[1];
             }
@@ -659,7 +672,9 @@ pub const Evaluat = struct {
             }
 
             // Passed pawn evaluation
-            if (isPassedPawn(sq, types.Color.Black, white_pawns, black_pawns)) {
+            const is_passed_b = isPassedPawn(sq, types.Color.Black, white_pawns, black_pawns);
+            if (is_passed_b) {
+                black_passed_bb |= types.squar_bb[sq];
                 var tmp_sc = get_passed_pawn_score(sq ^ 56); // Flip for black
                 pawn_structure_score[0] -= tmp_sc[0];
                 pawn_structure_score[1] -= tmp_sc[1];
@@ -673,15 +688,24 @@ pub const Evaluat = struct {
             }
 
             // Pawn is supported?
-            if ((black_pawn_attacks & types.squar_bb[sq]) != 0) {
+            const is_supported_b = (black_pawn_attacks & types.squar_bb[sq]) != 0;
+            if (is_supported_b) {
                 const tmp_sc = get_supported_pawn_bonus(7 - rank);
                 pawn_structure_score[0] -= tmp_sc[0];
                 pawn_structure_score[1] -= tmp_sc[1];
             }
 
             // Pawn phalanx
-            if (file < 7 and (black_pawns & types.squar_bb[sq + 1]) != 0) {
+            const has_phalanx_b = file < 7 and (black_pawns & types.squar_bb[sq + 1]) != 0;
+            if (has_phalanx_b) {
                 const tmp_sc = get_phalanx_score(7 - rank);
+                pawn_structure_score[0] -= tmp_sc[0];
+                pawn_structure_score[1] -= tmp_sc[1];
+            }
+
+            // Connected passed pawn bonus: passed + supported or phalanx
+            if (is_passed_b and (is_supported_b or has_phalanx_b)) {
+                const tmp_sc = get_connected_passer_bonus(7 - rank);
                 pawn_structure_score[0] -= tmp_sc[0];
                 pawn_structure_score[1] -= tmp_sc[1];
             }
@@ -1043,6 +1067,29 @@ pub const Evaluat = struct {
                 additional_material_score[1] += seventh_rank_bonus[1];
             }
 
+            // Rook behind passed pawn
+            {
+                const passers_on_file = (white_passed_bb | black_passed_bb) & file_mask;
+                if (passers_on_file != 0) {
+                    const own_passers = white_passed_bb & file_mask;
+                    if (own_passers != 0) {
+                        const lowest_passer_sq: u6 = @intCast(util.lsb_index(own_passers));
+                        if (sq < lowest_passer_sq) {
+                            additional_material_score[0] += 15;
+                            additional_material_score[1] += 25;
+                        }
+                    }
+                    const enemy_passers = black_passed_bb & file_mask;
+                    if (enemy_passers != 0) {
+                        const highest_passer_sq: u6 = @intCast(63 - @clz(enemy_passers));
+                        if (sq > highest_passer_sq) {
+                            additional_material_score[0] += 15;
+                            additional_material_score[1] += 25;
+                        }
+                    }
+                }
+            }
+
             // Threats
             var b1 = mobility & black_pawns;
             if (b1 != 0) {
@@ -1120,6 +1167,29 @@ pub const Evaluat = struct {
                 const second_rank_bonus = [_]i32{ 25, 35 }; // mg, eg
                 additional_material_score[0] -= second_rank_bonus[0];
                 additional_material_score[1] -= second_rank_bonus[1];
+            }
+
+            // Rook behind passed pawn
+            {
+                const passers_on_file = (white_passed_bb | black_passed_bb) & file_mask;
+                if (passers_on_file != 0) {
+                    const own_passers = black_passed_bb & file_mask;
+                    if (own_passers != 0) {
+                        const highest_passer_sq: u6 = @intCast(63 - @clz(own_passers));
+                        if (sq > highest_passer_sq) {
+                            additional_material_score[0] -= 15;
+                            additional_material_score[1] -= 25;
+                        }
+                    }
+                    const enemy_passers = white_passed_bb & file_mask;
+                    if (enemy_passers != 0) {
+                        const lowest_passer_sq: u6 = @intCast(util.lsb_index(enemy_passers));
+                        if (sq < lowest_passer_sq) {
+                            additional_material_score[0] -= 15;
+                            additional_material_score[1] -= 25;
+                        }
+                    }
+                }
             }
 
             // Threats
@@ -1301,14 +1371,12 @@ pub const Evaluat = struct {
         const black_bishop_count = util.popcount(black_bishop);
 
         if (white_bishop_count >= 2) {
-            const tmp_sc = [_]i32{ 12, 46 };
-            additional_material_score[0] += tmp_sc[0];
-            additional_material_score[1] += tmp_sc[1];
+            additional_material_score[0] += mg_bishop_pair[0];
+            additional_material_score[1] += eg_bishop_pair[0];
         }
         if (black_bishop_count >= 2) {
-            const tmp_sc = [_]i32{ 12, 46 };
-            additional_material_score[0] -= tmp_sc[0];
-            additional_material_score[1] -= tmp_sc[1];
+            additional_material_score[0] -= mg_bishop_pair[0];
+            additional_material_score[1] -= eg_bishop_pair[0];
         }
 
         // Doubled pawns
@@ -1396,16 +1464,14 @@ pub const Evaluat = struct {
 
             // King + Bishop vs King + Knight
             if (total_minors == 2 and
-                ((white_bishop_count == 1 and black_knight_count == 1) or
-                    (white_knight_count == 1 and black_bishop_count == 1)))
+                ((white_bishop_count == 1 and black_knight_count == 1) or (white_knight_count == 1 and black_bishop_count == 1)))
             {
                 return true;
             }
 
             // King + two Knights vs King
             if (total_minors == 2 and
-                ((white_knight_count == 2 and black_bishop_count == 0 and black_knight_count == 0) or
-                    (black_knight_count == 2 and white_bishop_count == 0 and white_knight_count == 0)))
+                ((white_knight_count == 2 and black_bishop_count == 0 and black_knight_count == 0) or (black_knight_count == 2 and white_bishop_count == 0 and white_knight_count == 0)))
             {
                 return true;
             }
@@ -1512,8 +1578,13 @@ const eg_queen_attacking: [6]i32 = .{ 0, -3, 8, 3, 0, 0 };
 const mg_doubled_pawns: [1]i32 = .{-2};
 const eg_doubled_pawns: [1]i32 = .{-13};
 
-const mg_bishop_pair: [1]i32 = .{12};
-const eg_bishop_pair: [1]i32 = .{46};
+// Connected passed pawn bonus by rank: passed pawns that are supported or in phalanx
+// These pawns protect each other while advancing, making them especially dangerous
+const mg_connected_passer: [8]i32 = .{ 0, 5, 7, 12, 20, 35, 0, 0 };
+const eg_connected_passer: [8]i32 = .{ 0, 7, 10, 17, 30, 50, 0, 0 };
+
+const mg_bishop_pair: [1]i32 = .{30};
+const eg_bishop_pair: [1]i32 = .{50};
 
 pub inline fn get_passed_pawn_score(sq: u6) [2]i32 {
     return .{ mg_passed_score[sq], eg_passed_score[sq] };
@@ -1558,6 +1629,10 @@ pub inline fn get_supported_pawn_bonus(rank: u6) [2]i32 {
 
 pub inline fn get_phalanx_score(rank: u6) [2]i32 {
     return .{ mg_pawn_phalanx[rank], eg_pawn_phalanx[rank] };
+}
+
+pub inline fn get_connected_passer_bonus(rank: u6) [2]i32 {
+    return .{ mg_connected_passer[rank], eg_connected_passer[rank] };
 }
 
 pub inline fn get_knight_mobility_score(idx: u7) [2]i32 {

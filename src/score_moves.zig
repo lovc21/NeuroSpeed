@@ -39,6 +39,7 @@ const SCORE_QUIET = 0;
 const SCORE_BAD_CAPTURE = -1000000;
 const SCORE_KILLER = 90000;
 const SCORE_KILLER_2 = 80000;
+const SCORE_COUNTERMOVE = 50000;
 const MAX_LOOP_COUNT = 32;
 const SCORE_PV_MOVE = 10000000;
 
@@ -81,7 +82,7 @@ pub inline fn get_next_best_move(move_list: *lists.MoveList, score_list: *lists.
     return move_list.moves[i];
 }
 
-pub inline fn score_move(board: *types.Board, move_list: *lists.MoveList, score_list: *lists.ScoreList,pv_move: move_gen.Move) void {
+pub inline fn score_move(board: *types.Board, move_list: *lists.MoveList, score_list: *lists.ScoreList, pv_move: move_gen.Move, countermove: move_gen.Move) void {
     score_list.count = 0;
     
     for (0..move_list.count) |i| {
@@ -154,8 +155,11 @@ pub inline fn score_move(board: *types.Board, move_list: *lists.MoveList, score_
             // score second killer move
             } else if (std.meta.eql(move_list.moves[i],search.global_search.killer_moves[1][search.global_search.ply])) {
                 score = SCORE_KILLER_2;
+            // score countermove
+            } else if (!countermove.is_empty() and moves_equal(move, countermove)) {
+                score = SCORE_COUNTERMOVE;
             // score history move
-            } else{ 
+            } else{
                 score = search.global_search.history_moves[move.from][move.to];
             }
         }
@@ -280,13 +284,8 @@ pub fn see(board: *const types.Board, move: move_generation.Move, threshold: i32
         // Update the value (negamax style)
         value = -value - 1 - attacker_piece_val;
 
-        // Pruning - if this capture is good enough, stop
+        // Pruning - if this side can stand pat with value >= 0, the exchange is decided
         if (value >= 0) {
-            // Check if the opponent still has attackers
-            const opp_side_mask = if (side == types.Color.White) board.set_white() else board.set_black();
-            if ((attackers & opp_side_mask) != 0) {
-                return side != board.get_piece_color_at(move.from).?;
-            }
             return side != board.get_piece_color_at(move.from).?;
         }
 

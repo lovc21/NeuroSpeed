@@ -25,6 +25,7 @@ pub const UCI = struct {
     pub fn new(allocator: std.mem.Allocator) UCI {
         attacks.init_attacks();
         search.init_search();
+        search.init_tt(std.heap.page_allocator, 64); // Default 64 MB TT
         var board = types.Board.new();
         bitboard.fan_pars(types.start_position, &board) catch {
             print("Error parsing fen in the new uci function\n", .{});
@@ -178,13 +179,16 @@ pub const UCI = struct {
             }
         }
 
-        // Calculate time for move
-        var calculated_time: u64 = 1000;
+        // Calculate time for move (0 = no time limit)
+        var soft_limit: u64 = 0;
+        var hard_limit: u64 = 0;
 
         if (movetime) |mt| {
-            calculated_time = mt;
-        } else if (infinite) {
-            calculated_time = 1000000; // Very long time for infinite
+            soft_limit = mt;
+            hard_limit = mt;
+        } else if (infinite or depth != null) {
+            soft_limit = 0;
+            hard_limit = 0;
         } else {
             // Calculate time based on remaining time and increment
             var my_time: ?u64 = null;
@@ -200,30 +204,43 @@ pub const UCI = struct {
 
             if (my_time) |time| {
                 const inc = my_inc orelse 0;
+
                 if (movestogo) |moves| {
-                    // Fixed number of moves
-                    calculated_time = (time / moves) + inc;
+                    const m = @max(moves, 1);
+                    soft_limit = time / m + inc * 3 / 4;
                 } else {
-                    // Sudden death or increment
-                    calculated_time = (time / 30) + inc; // Assume 30 moves left
+                    const total_phase: u64 = @as(u64, eval.global_evaluator.phase[0]) +
+                        @as(u64, eval.global_evaluator.phase[1]);
+                    const estimated_moves: u64 = if (total_phase >= 24)
+                        40 // Opening
+                    else if (total_phase >= 16)
+                        35 // Middlegame
+                    else if (total_phase >= 8)
+                        30 // Late middlegame
+                    else
+                        25; // Endgame
+
+                    soft_limit = time / estimated_moves + inc * 3 / 4;
                 }
-                calculated_time = @min(calculated_time, time - 100); // Leave 100ms buffer
-                calculated_time = @max(calculated_time, 100); // Minimum 100ms
+
+                // Hard limit: never use more than 50% of remaining time
+                hard_limit = @min(soft_limit * 3, time / 2);
+                // Safety buffer: always leave at least 50ms
+                if (time > 50) {
+                    hard_limit = @min(hard_limit, time - 50);
+                } else {
+                    hard_limit = 1;
+                }
+                // Minimum limits
+                soft_limit = @max(soft_limit, 10);
+                hard_limit = @max(hard_limit, 10);
             }
         }
 
-        // // Start search in a separate thread
-        // self.search_thread = std.Thread.spawn(.{}, searchWrapper, .{ self, depth, calculated_time }) catch |err| {
-        //     print("Error starting search thread: {}\n", .{err});
-        //     return;
-        // };
-        //
-        //
-        searchWrapper(self, depth, calculated_time);
+        searchWrapper(self, depth, soft_limit, hard_limit);
     }
 
     fn run_bench(self: *UCI, stdout: anytype) !void {
-        // Benchmark positions (use diverse positions)
         const bench_positions = [_][]const u8{
             "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
             "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
@@ -233,70 +250,60 @@ pub const UCI = struct {
         };
 
         var total_nodes: u64 = 0;
-        const start_time = std.time.milliTimestamp();
+        var timer = std.time.Timer.start() catch unreachable;
 
-        // Run perft depth 5 on each position
         for (bench_positions) |fen| {
-            // Parse position
             try bitboard.fan_pars(fen, &self.board);
 
-            // Run perft (you'll need to modify perft to return nodes)
-            const nodes = self.count_nodes(4);
-            total_nodes += nodes;
+            search.init_search();
+            if (search.global_tt) |*tt| {
+                tt.clear();
+            }
+
+            if (self.board.side == types.Color.White) {
+                search.search_position(&self.board, 11, 0, 0, types.Color.White);
+            } else {
+                search.search_position(&self.board, 11, 0, 0, types.Color.Black);
+            }
+
+            total_nodes += search.global_search.nodes;
         }
 
-        const end_time = std.time.milliTimestamp();
-        const elapsed_ms = @as(u64, @intCast(end_time - start_time));
-        const elapsed_s = @as(f64, @floatFromInt(elapsed_ms)) / 1000.0;
-        const nps: u64 = if (elapsed_s > 0) @intFromFloat(@as(f64, @floatFromInt(total_nodes)) / elapsed_s) else total_nodes;
+        const elapsed_ns = @max(1, timer.read());
+        const nps = @as(u128, total_nodes) * std.time.ns_per_s / elapsed_ns;
 
-        // CRITICAL: Output in EXACTLY this format for OpenBench
-        try stdout.print("Nodes: {d}\n", .{total_nodes});
-        try stdout.print("NPS: {d}\n", .{nps});
+        try stdout.print("{d} nodes {d} nps\n", .{ total_nodes, nps });
     }
 
-    // Helper function to count nodes (wrapper around perft)
-    fn count_nodes(self: *UCI, depth: u8) u64 {
-        if (depth == 0) return 1;
+    fn parse_setoption(self: *UCI, command: []const u8) void {
+        // Format: setoption name <name> value <value>
+        _ = self;
+        var tokens = std.mem.tokenizeScalar(u8, command, ' ');
+        _ = tokens.next(); // "setoption"
 
-        var move_list: lists.MoveList = .{};
-        var nodes: u64 = 0;
+        const name_kw = tokens.next() orelse return;
+        if (!std.mem.eql(u8, name_kw, "name")) return;
 
-        if (self.board.side == types.Color.White) {
-            move_gen.generate_moves(&self.board, &move_list, types.Color.White);
-        } else {
-            move_gen.generate_moves(&self.board, &move_list, types.Color.Black);
+        const name = tokens.next() orelse return;
+
+        const value_kw = tokens.next() orelse return;
+        if (!std.mem.eql(u8, value_kw, "value")) return;
+
+        const value_str = tokens.next() orelse return;
+
+        if (std.mem.eql(u8, name, "Hash")) {
+            const size_mb = std.fmt.parseUnsigned(usize, value_str, 10) catch return;
+            const clamped = @max(1, @min(size_mb, 4096));
+            search.init_tt(std.heap.page_allocator, clamped);
+            print("info string Hash set to {} MB\n", .{clamped});
         }
-
-        for (0..move_list.count) |i| {
-            // Save evaluator state before making move
-            const saved_evaluator = eval.global_evaluator;
-
-            var board_copy = self.board;
-            _ = move_gen.make_move(&board_copy, move_list.moves[i]);
-
-            var temp_uci = UCI{
-                .board = board_copy,
-                .allocator = self.allocator,
-                .is_searching = false,
-                .stop_search = false,
-                .search_thread = null,
-            };
-
-            nodes += temp_uci.count_nodes(depth - 1);
-
-            // Restore evaluator state after recursive call
-            eval.global_evaluator = saved_evaluator;
-        }
-
-        return nodes;
     }
 
-    fn searchWrapper(self: *UCI, depth: ?u8, time_ms: u64) void {
+    fn searchWrapper(self: *UCI, depth: ?u8, soft_limit: u64, hard_limit: u64) void {
         if (self.board.side == types.Color.White) {
-            search.search_position(&self.board, depth, time_ms, types.Color.White);
+            search.search_position(&self.board, depth, soft_limit, hard_limit, types.Color.White);
         } else {
-            search.search_position(&self.board, depth, time_ms, types.Color.Black);
+            search.search_position(&self.board, depth, soft_limit, hard_limit, types.Color.Black);
         }
     }
     // main loop
@@ -324,6 +331,7 @@ pub const UCI = struct {
                 } else if (std.mem.eql(u8, command, "uci")) {
                     try stdout.print("id name {s} {s}\n", .{ ENGINE_NAME, VERSION });
                     try stdout.print("id author {s}\n", .{AUTHOR});
+                    try stdout.print("option name Hash type spin default 64 min 1 max 4096\n", .{});
                     try stdout.print("uciok\n", .{});
                 } else if (std.mem.eql(u8, command, "isready")) {
                     try stdout.print("readyok\n", .{});
@@ -331,11 +339,17 @@ pub const UCI = struct {
                     // Reset board to starting position
                     self.board = types.Board.new();
                     try bitboard.fan_pars(types.start_position, &self.board);
+                    search.init_search(); // Reset search state
+                    if (search.global_tt) |*tt| {
+                        tt.clear();
+                    }
                     self.stop_search = true;
                     if (self.search_thread) |thread| {
                         thread.join();
                         self.search_thread = null;
                     }
+                } else if (std.mem.eql(u8, command, "setoption")) {
+                    self.parse_setoption(trimmed);
                 } else if (std.mem.eql(u8, command, "position")) {
                     try self.parse_position(trimmed);
                 } else if (std.mem.eql(u8, command, "go")) {
@@ -358,7 +372,6 @@ pub const UCI = struct {
                     try self.run_bench(stdout);
                 } else {
                     try stdout.print("Unknown command: {s}\n", .{command});
-                    break;
                 }
             } else |err| {
                 print("Error reading input: {}\n", .{err});
@@ -371,5 +384,6 @@ pub const UCI = struct {
             self.stop_search = true;
             thread.join();
         }
+        search.deinit_tt();
     }
 };
