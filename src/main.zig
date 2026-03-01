@@ -125,8 +125,6 @@ fn run_bench(depth: u8) void {
 
     attacks.init_attacks();
     search.init_search();
-    search.init_tt(std.heap.page_allocator, 16);
-    defer search.deinit_tt();
 
     const bench_positions = [_][]const u8{
         "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
@@ -162,14 +160,11 @@ fn run_bench(depth: u8) void {
         bitboard.fan_pars(fen, &board) catch continue;
 
         search.init_search();
-        if (search.global_tt) |*tt| {
-            tt.clear();
-        }
 
         if (board.side == types.Color.White) {
-            search.search_position(&board, depth, 0, 0, types.Color.White);
+            search.search_position(&board, depth, 0, types.Color.White);
         } else {
-            search.search_position(&board, depth, 0, 0, types.Color.Black);
+            search.search_position(&board, depth, 0, types.Color.Black);
         }
 
         total_nodes += search.global_search.nodes;
