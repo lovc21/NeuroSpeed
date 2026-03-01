@@ -332,6 +332,7 @@ pub const UCI = struct {
                     try stdout.print("id name {s} {s}\n", .{ ENGINE_NAME, VERSION });
                     try stdout.print("id author {s}\n", .{AUTHOR});
                     try stdout.print("option name Hash type spin default 64 min 1 max 4096\n", .{});
+                    try stdout.print("option name Threads type spin default 1 min 1 max 1\n", .{});
                     try stdout.print("uciok\n", .{});
                 } else if (std.mem.eql(u8, command, "isready")) {
                     try stdout.print("readyok\n", .{});
