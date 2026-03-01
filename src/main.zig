@@ -82,7 +82,7 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     var do_bench = false;
-    var bench_depth: u8 = 11;
+    var bench_depth: u8 = 7;
     var args = std.process.args();
     _ = args.next();
     while (args.next()) |arg| {
