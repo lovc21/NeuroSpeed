@@ -5,7 +5,6 @@ const move_generation = @import("move_generation.zig");
 const types = @import("types.zig");
 const bitboard = @import("bitboard.zig");
 const util = @import("util.zig");
-const print = std.debug.print;
 const move_scores = @import("score_moves.zig");
 const Move = move_generation.Move;
 
@@ -17,6 +16,11 @@ pub fn search_position(board: *types.Board, max_depth: ?u8, time_ms: u64, compti
 
 pub fn init_search() void {
     global_search = Search.new();
+}
+
+fn print(comptime fmt: []const u8, args: anytype) void {
+    const w = std.io.getStdOut().writer();
+    w.print(fmt, args) catch {};
 }
 
 const INFINITY: i32 = 50000;
