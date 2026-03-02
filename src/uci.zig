@@ -358,13 +358,15 @@ pub const UCI = struct {
                     util.perft_test_detailed(&self.board, depth);
                 } else if (std.mem.eql(u8, command, "bench")) {
                     try self.run_bench(stdout);
+                } else if (std.mem.eql(u8, command, "setoption")) {
+                    // TODO: Implement this
                 } else {
                     try stdout.print("Unknown command: {s}\n", .{command});
                     break;
                 }
             } else |err| {
                 print("Error reading input: {}\n", .{err});
-                continue;
+                break;
             }
         }
 
