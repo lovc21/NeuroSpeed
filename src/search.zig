@@ -5,7 +5,6 @@ const move_generation = @import("move_generation.zig");
 const types = @import("types.zig");
 const bitboard = @import("bitboard.zig");
 const util = @import("util.zig");
-const print = std.debug.print;
 const move_scores = @import("score_moves.zig");
 const tt_mod = @import("tt.zig");
 const zobrist = @import("zobrist.zig");
@@ -20,6 +19,11 @@ pub fn search_position(board: *types.Board, max_depth: ?u8, soft_limit: u64, har
 
 pub fn init_search() void {
     global_search = Search.new();
+}
+
+fn print(comptime fmt: []const u8, args: anytype) void {
+    const w = std.io.getStdOut().writer();
+    w.print(fmt, args) catch {};
 }
 
 pub fn init_tt(allocator: std.mem.Allocator, size_mb: usize) void {
@@ -514,7 +518,7 @@ pub const Search = struct {
                     const is_killer = (move.from == self.killer_moves[0][parent_ply].from and
                         move.to == self.killer_moves[0][parent_ply].to) or
                         (move.from == self.killer_moves[1][parent_ply].from and
-                            move.to == self.killer_moves[1][parent_ply].to);
+                        move.to == self.killer_moves[1][parent_ply].to);
 
                     if (!gives_check and !is_killer) {
                         reduction = lmr_reductions[@min(@as(usize, depth), 63)][@min(legal_moves, 63)];
