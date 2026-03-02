@@ -518,7 +518,7 @@ pub const Search = struct {
                     const is_killer = (move.from == self.killer_moves[0][parent_ply].from and
                         move.to == self.killer_moves[0][parent_ply].to) or
                         (move.from == self.killer_moves[1][parent_ply].from and
-                        move.to == self.killer_moves[1][parent_ply].to);
+                            move.to == self.killer_moves[1][parent_ply].to);
 
                     if (!gives_check and !is_killer) {
                         reduction = lmr_reductions[@min(@as(usize, depth), 63)][@min(legal_moves, 63)];
