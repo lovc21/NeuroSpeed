@@ -4,6 +4,7 @@ const types = @import("types.zig");
 const attacks = @import("attacks.zig");
 const tables = @import("tabeles.zig");
 const eval = @import("evaluation.zig");
+const zobrist = @import("zobrist.zig");
 const print = std.debug.print;
 
 pub fn print_board(bitboard: types.Bitboard) void {
@@ -287,6 +288,9 @@ pub fn fan_pars(fen: []const u8, board: *types.Board) !void {
     } else {
         return FenError.InvalidEnPassant;
     }
+
+    // Compute Zobrist hash from scratch
+    board.hash = zobrist.compute_hash(board);
 }
 
 pub inline fn get_all_attackers(board: *const types.Board, square: u6, occupied: u64) u64 {

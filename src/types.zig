@@ -172,6 +172,7 @@ pub const BoardState = struct {
     side: Color,
     enpassant: square,
     castle: u8,
+    hash: u64,
 
     pub fn save(board: *const Board) BoardState {
         return BoardState{
@@ -180,6 +181,7 @@ pub const BoardState = struct {
             .side = board.side,
             .enpassant = board.enpassant,
             .castle = board.castle,
+            .hash = board.hash,
         };
     }
 
@@ -189,6 +191,7 @@ pub const BoardState = struct {
         board.side = self.side;
         board.enpassant = self.enpassant;
         board.castle = self.castle;
+        board.hash = self.hash;
     }
 };
 
@@ -198,7 +201,8 @@ pub const Board = struct {
     side: Color,
     enpassant: square,
     castle: u8, // bitmask of Castle
-   
+    hash: u64 = 0, // Zobrist hash
+
 
     pub const PieceCount = @intFromEnum(Piece.NO_PIECE) + 1;
 
@@ -230,12 +234,13 @@ pub const Board = struct {
         var b: Board = undefined;
 
         @memset(b.pieces[0..], 0);
-        
+
         @memset(b.board[0..], Piece.NO_PIECE);
 
         b.side = Color.White;
         b.enpassant = square.NO_SQUARE;
         b.castle = 0;
+        b.hash = 0;
         return b;
     }
 

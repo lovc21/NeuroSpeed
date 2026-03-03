@@ -7,6 +7,7 @@ const util = @import("util.zig");
 const eval = @import("evaluation.zig");
 const move_gen = @import("move_generation.zig");
 const lists = @import("lists.zig");
+const zobrist = @import("zobrist.zig");
 const print = std.debug.print;
 const expect = std.testing.expect;
 
@@ -581,6 +582,61 @@ test "test phase calculation" {
                 try std.testing.expectEqual(eval.global_evaluator.phase[0], 6);
                 try std.testing.expectEqual(eval.global_evaluator.phase[1], 0);
                 break;
+            }
+        }
+    }
+}
+
+test "Zobrist hash consistency after moves" {
+    attacks.init_attacks();
+
+    const test_fens = [_][]const u8{
+        types.start_position,
+        types.tricky_position,
+        "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1",
+        "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1",
+        "rnbqkb1r/pp1p1pPp/8/2p1pP2/1P1P4/3P3P/P1P1P3/RNBQKBNR w KQkq e6 0 1",
+    };
+
+    for (test_fens) |fen| {
+        var board = types.Board.new();
+        try bitboard.fan_pars(fen, &board);
+
+        // Verify initial hash matches full computation
+        const initial_hash = zobrist.compute_hash(&board);
+        try std.testing.expectEqual(initial_hash, board.hash);
+
+        // Generate all legal moves and verify hash after each
+        var move_list: lists.MoveList = .{};
+        if (board.side == types.Color.White) {
+            move_gen.generate_moves(&board, &move_list, types.Color.White);
+        } else {
+            move_gen.generate_moves(&board, &move_list, types.Color.Black);
+        }
+
+        for (0..move_list.count) |i| {
+            const move = move_list.moves[i];
+            const saved_state = board.save_state();
+            const saved_eval = eval.global_evaluator;
+
+            if (move_gen.make_move(&board, move)) {
+                const expected_hash = zobrist.compute_hash(&board);
+                if (board.hash != expected_hash) {
+                    const from_str = types.SquareString.getSquareToString(@enumFromInt(move.from));
+                    const to_str = types.SquareString.getSquareToString(@enumFromInt(move.to));
+                    print("Hash mismatch after move {s}{s} (flags={}) in FEN: {s}\n", .{
+                        from_str, to_str, @intFromEnum(move.flags), fen,
+                    });
+                    print("  Incremental: 0x{x}\n  Recomputed:  0x{x}\n", .{ board.hash, expected_hash });
+                }
+                try std.testing.expectEqual(expected_hash, board.hash);
+
+                board.restore_state(saved_state);
+                eval.global_evaluator = saved_eval;
+                try std.testing.expectEqual(initial_hash, board.hash);
+            } else {
+                board.restore_state(saved_state);
+                eval.global_evaluator = saved_eval;
             }
         }
     }

@@ -5,6 +5,7 @@ const lists = @import("lists.zig");
 const util = @import("util.zig");
 const bitboard = @import("bitboard.zig");
 const eval = @import("evaluation.zig");
+const zobrist = @import("zobrist.zig");
 const print = std.debug.print;
 
 // Define a move
@@ -707,6 +708,15 @@ pub fn make_move(board: *types.Board, move: Move) bool {
     // Determine the moving side based on the piece found
     moving_side = if (@intFromEnum(piece_type) < 6) types.Color.White else types.Color.Black;
 
+    // Save old castling rights and en passant for hash update
+    const old_castle = board.castle;
+    const old_ep = board.enpassant;
+
+    // Zobrist: remove piece from source, add to target
+    const pi = zobrist.piece_index(piece_type);
+    board.hash ^= zobrist.piece_keys[pi][source_square];
+    board.hash ^= zobrist.piece_keys[pi][target_square];
+
     // Move the piece
     board.pieces[@intFromEnum(piece_type)] = util.clear_bit(board.pieces[@intFromEnum(piece_type)], @enumFromInt(source_square));
     board.pieces[@intFromEnum(piece_type)] = util.set_bit(board.pieces[@intFromEnum(piece_type)], @enumFromInt(target_square));
@@ -723,6 +733,7 @@ pub fn make_move(board: *types.Board, move: Move) bool {
                 if (util.get_bit(board.pieces[captured_piece_idx], target_square)) {
                     board.pieces[captured_piece_idx] = util.clear_bit(board.pieces[captured_piece_idx], @enumFromInt(target_square));
                     const captured_piece: types.Piece = @enumFromInt(captured_piece_idx);
+                    board.hash ^= zobrist.piece_keys[zobrist.piece_index(captured_piece)][target_square];
                     eval.global_evaluator.remove_piece_phase(captured_piece);
                     eval.global_evaluator.remove_piece_material(captured_piece);
                     break;
@@ -739,6 +750,9 @@ pub fn make_move(board: *types.Board, move: Move) bool {
         const promoted_piece = get_promoted_piece(move_flags, moving_side);
         board.pieces[@intFromEnum(promoted_piece)] = util.set_bit(board.pieces[@intFromEnum(promoted_piece)], @enumFromInt(target_square));
 
+        board.hash ^= zobrist.piece_keys[zobrist.piece_index(pawn_piece)][target_square];
+        board.hash ^= zobrist.piece_keys[zobrist.piece_index(promoted_piece)][target_square];
+
         eval.global_evaluator.remove_piece_phase(pawn_piece);
         eval.global_evaluator.remove_piece_material(pawn_piece);
         eval.global_evaluator.put_piece_phase(promoted_piece);
@@ -754,6 +768,7 @@ pub fn make_move(board: *types.Board, move: Move) bool {
 
         const captured_pawn = if (moving_side == types.Color.White) types.Piece.BLACK_PAWN else types.Piece.WHITE_PAWN;
         board.pieces[@intFromEnum(captured_pawn)] = util.clear_bit(board.pieces[@intFromEnum(captured_pawn)], @enumFromInt(captured_pawn_square));
+        board.hash ^= zobrist.piece_keys[zobrist.piece_index(captured_pawn)][captured_pawn_square];
         eval.global_evaluator.remove_piece_phase(captured_pawn);
         eval.global_evaluator.remove_piece_material(captured_pawn);
     }
@@ -771,11 +786,57 @@ pub fn make_move(board: *types.Board, move: Move) bool {
 
     // Handle castling moves
     if (move_flags == types.MoveFlags.OO or move_flags == types.MoveFlags.OOO) {
+        const rook_piece = if (moving_side == types.Color.White) types.Piece.WHITE_ROOK else types.Piece.BLACK_ROOK;
+        const rook_pi = zobrist.piece_index(rook_piece);
+        switch (target_square) {
+            @intFromEnum(types.square.g1) => {
+                board.hash ^= zobrist.piece_keys[rook_pi][@intFromEnum(types.square.h1)];
+                board.hash ^= zobrist.piece_keys[rook_pi][@intFromEnum(types.square.f1)];
+            },
+            @intFromEnum(types.square.c1) => {
+                board.hash ^= zobrist.piece_keys[rook_pi][@intFromEnum(types.square.a1)];
+                board.hash ^= zobrist.piece_keys[rook_pi][@intFromEnum(types.square.d1)];
+            },
+            @intFromEnum(types.square.g8) => {
+                board.hash ^= zobrist.piece_keys[rook_pi][@intFromEnum(types.square.h8)];
+                board.hash ^= zobrist.piece_keys[rook_pi][@intFromEnum(types.square.f8)];
+            },
+            @intFromEnum(types.square.c8) => {
+                board.hash ^= zobrist.piece_keys[rook_pi][@intFromEnum(types.square.a8)];
+                board.hash ^= zobrist.piece_keys[rook_pi][@intFromEnum(types.square.d8)];
+            },
+            else => {},
+        }
         handle_castling(board, target_square, moving_side);
     }
 
     // Update castling rights using bitboard masks
     update_castling_rights(board, source_square, target_square);
+
+    // Zobrist: update castling rights (XOR out old, XOR in new)
+    if (old_castle != board.castle) {
+        // XOR out old castling keys
+        if (old_castle & @intFromEnum(types.Castle.WK) != 0) board.hash ^= zobrist.castle_keys[0];
+        if (old_castle & @intFromEnum(types.Castle.WQ) != 0) board.hash ^= zobrist.castle_keys[1];
+        if (old_castle & @intFromEnum(types.Castle.BK) != 0) board.hash ^= zobrist.castle_keys[2];
+        if (old_castle & @intFromEnum(types.Castle.BQ) != 0) board.hash ^= zobrist.castle_keys[3];
+        // XOR in new castling keys
+        if (board.castle & @intFromEnum(types.Castle.WK) != 0) board.hash ^= zobrist.castle_keys[0];
+        if (board.castle & @intFromEnum(types.Castle.WQ) != 0) board.hash ^= zobrist.castle_keys[1];
+        if (board.castle & @intFromEnum(types.Castle.BK) != 0) board.hash ^= zobrist.castle_keys[2];
+        if (board.castle & @intFromEnum(types.Castle.BQ) != 0) board.hash ^= zobrist.castle_keys[3];
+    }
+
+    // Zobrist: update en passant
+    if (old_ep != types.square.NO_SQUARE) {
+        board.hash ^= zobrist.ep_keys[@intFromEnum(old_ep) % 8];
+    }
+    if (board.enpassant != types.square.NO_SQUARE) {
+        board.hash ^= zobrist.ep_keys[@intFromEnum(board.enpassant) % 8];
+    }
+
+    // Zobrist: flip side to move
+    board.hash ^= zobrist.side_key;
 
     // Check if move leaves our king in check (illegal move)
     const our_king_piece = if (moving_side == types.Color.White) types.Piece.WHITE_KING else types.Piece.BLACK_KING;
@@ -783,7 +844,7 @@ pub fn make_move(board: *types.Board, move: Move) bool {
     const opponent_side = if (moving_side == types.Color.White) types.Color.Black else types.Color.White;
 
     if (bitboard.is_square_attacked(board, our_king_square, opponent_side)) {
-        // Restore board state - illegal move
+        // Restore board state - illegal move (hash is restored via BoardState)
         board.restore_state(saved_state);
         eval.global_evaluator = saved_evaluator;
         return false;
