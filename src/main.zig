@@ -162,9 +162,9 @@ fn run_bench(depth: u8) void {
         search.init_search();
 
         if (board.side == types.Color.White) {
-            search.search_position(&board, depth, 0, types.Color.White);
+            search.search_position(&board, depth, 0, 0, types.Color.White);
         } else {
-            search.search_position(&board, depth, 0, types.Color.Black);
+            search.search_position(&board, depth, 0, 0, types.Color.Black);
         }
 
         total_nodes += search.global_search.nodes;
