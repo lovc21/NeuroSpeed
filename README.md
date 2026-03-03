@@ -10,19 +10,13 @@ NeuroSpeed is a UCI chess engine that is optimized for extreme time controls. Th
 
 ## Releases
 
-This chess engine is still in development. When I have it in working order and with some results, I will release it as version 1 (v1)
+This chess engine is still in development (pre-1.0). A stable v1.0 release will follow once testing and tuning are complete.
 
 ## Strength
 
-**TODO:**
-
-- Update the strength table:
-
-| Version | Release Date | CCRL Blitz | CCRL 40/15 |
-|---------|--------------|------------|------------|
-| v1.0    | 2024-01-01   | 3000       | 3050       |
-| v1.1    | 2024-03-15   | 3100       | 3150       |
-| v2.0    | 2024-06-10   | 3200       | 3250       |
+| Version | Date       | Estimated Elo |
+|---------|------------|---------------|
+| pre-1.0 | 2026-03-03 | 2100 - 2300   |
 
 ## Features
 
