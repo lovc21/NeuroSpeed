@@ -1,11 +1,12 @@
 const std = @import("std");
-const tabele = @import("tabeles.zig");
+const tables = @import("tables.zig");
 const types = @import("types.zig");
 const attacks = @import("attacks.zig");
 const bitboard = @import("bitboard.zig");
 const util = @import("util.zig");
 const eval = @import("evaluation.zig");
-const move_gen = @import("move_generation.zig");
+const move_gen = @import("move.zig");
+const movegen = @import("movegen.zig");
 const lists = @import("lists.zig");
 const zobrist = @import("zobrist.zig");
 const print = std.debug.print;
@@ -77,88 +78,88 @@ test "test print bitboard unicode" {
 
 test "white pawn attacks" {
     print("White pawn attacks from e2 : 0x280000\n", .{});
-    try expect(attacks.pawn_attacks_from_bitboard(types.Color.White, util.set_bit(types.empty_Bitboard, types.square.e2)) == 0x280000);
+    try expect(attacks.pawn_attacks_from_bitboard(types.Color.White, util.set_bit(types.empty_bitboard, types.square.e2)) == 0x280000);
 
     print("White pawn attacks from a2 : 0x20000\n", .{});
-    try expect(attacks.pawn_attacks_from_bitboard(types.Color.White, util.set_bit(types.empty_Bitboard, types.square.a2)) == 0x20000);
+    try expect(attacks.pawn_attacks_from_bitboard(types.Color.White, util.set_bit(types.empty_bitboard, types.square.a2)) == 0x20000);
 
     print("White pawn attacks from h2 : 0x400000\n", .{});
-    try expect(attacks.pawn_attacks_from_bitboard(types.Color.White, util.set_bit(types.empty_Bitboard, types.square.h2)) == 0x400000);
+    try expect(attacks.pawn_attacks_from_bitboard(types.Color.White, util.set_bit(types.empty_bitboard, types.square.h2)) == 0x400000);
 
     print("White pawn attacks from d4 : 0x1400000000\n", .{});
-    try expect(attacks.pawn_attacks_from_bitboard(types.Color.White, util.set_bit(types.empty_Bitboard, types.square.d4)) == 0x1400000000);
+    try expect(attacks.pawn_attacks_from_bitboard(types.Color.White, util.set_bit(types.empty_bitboard, types.square.d4)) == 0x1400000000);
 
     print("White pawn attacks from f7 : 0x5000000000000000\n", .{});
-    try expect(attacks.pawn_attacks_from_bitboard(types.Color.White, util.set_bit(types.empty_Bitboard, types.square.f7)) == 0x5000000000000000);
+    try expect(attacks.pawn_attacks_from_bitboard(types.Color.White, util.set_bit(types.empty_bitboard, types.square.f7)) == 0x5000000000000000);
 }
 
 test "black pawn attacks" {
     print("Black pawn attacks form e7 : 0x280000000000\n", .{});
-    try expect(attacks.pawn_attacks_from_bitboard(types.Color.Black, util.set_bit(types.empty_Bitboard, types.square.e7)) == 0x280000000000);
+    try expect(attacks.pawn_attacks_from_bitboard(types.Color.Black, util.set_bit(types.empty_bitboard, types.square.e7)) == 0x280000000000);
 
     print("Black pawn attacks from a7 : 0x20000000000\n", .{});
-    try expect(attacks.pawn_attacks_from_bitboard(types.Color.Black, util.set_bit(types.empty_Bitboard, types.square.a7)) == 0x20000000000);
+    try expect(attacks.pawn_attacks_from_bitboard(types.Color.Black, util.set_bit(types.empty_bitboard, types.square.a7)) == 0x20000000000);
 
     print("Black pawn attacks from h7 : 0x400000000000\n", .{});
-    try expect(attacks.pawn_attacks_from_bitboard(types.Color.Black, util.set_bit(types.empty_Bitboard, types.square.h7)) == 0x400000000000);
+    try expect(attacks.pawn_attacks_from_bitboard(types.Color.Black, util.set_bit(types.empty_bitboard, types.square.h7)) == 0x400000000000);
 
     print("Black pawn attacks from d5 : 0x14000000\n", .{});
-    try expect(attacks.pawn_attacks_from_bitboard(types.Color.Black, util.set_bit(types.empty_Bitboard, types.square.d5)) == 0x14000000);
+    try expect(attacks.pawn_attacks_from_bitboard(types.Color.Black, util.set_bit(types.empty_bitboard, types.square.d5)) == 0x14000000);
 
     print("Black pawn attacks from f2 : 0x50\n", .{});
-    try expect(attacks.pawn_attacks_from_bitboard(types.Color.Black, util.set_bit(types.empty_Bitboard, types.square.f2)) == 0x50);
+    try expect(attacks.pawn_attacks_from_bitboard(types.Color.Black, util.set_bit(types.empty_bitboard, types.square.f2)) == 0x50);
 }
 
 test "King attacks" {
     print("King attacks from e2 : 0x382838\n", .{});
-    try expect(attacks.king_attacks_from_bitboard(util.set_bit(types.empty_Bitboard, types.square.e2)) == 0x382838);
+    try expect(attacks.king_attacks_from_bitboard(util.set_bit(types.empty_bitboard, types.square.e2)) == 0x382838);
 
     print("King attacks from h1 : 0xC040\n", .{});
-    try expect(attacks.king_attacks_from_bitboard(util.set_bit(types.empty_Bitboard, types.square.h1)) == 0xC040);
+    try expect(attacks.king_attacks_from_bitboard(util.set_bit(types.empty_bitboard, types.square.h1)) == 0xC040);
 
     print("King attacks from a8 : 0x203000000000000\n", .{});
-    try expect(attacks.king_attacks_from_bitboard(util.set_bit(types.empty_Bitboard, types.square.a8)) == 0x203000000000000);
+    try expect(attacks.king_attacks_from_bitboard(util.set_bit(types.empty_bitboard, types.square.a8)) == 0x203000000000000);
 
     print("King attacks from d4 : 0x1D41C0000\n", .{});
-    try expect(attacks.king_attacks_from_bitboard(util.set_bit(types.empty_Bitboard, types.square.d4)) == 0x1c141c0000);
+    try expect(attacks.king_attacks_from_bitboard(util.set_bit(types.empty_bitboard, types.square.d4)) == 0x1c141c0000);
 
     print("King attacks from b1 : 0x705\n", .{});
-    try expect(attacks.king_attacks_from_bitboard(util.set_bit(types.empty_Bitboard, types.square.b1)) == 0x705);
+    try expect(attacks.king_attacks_from_bitboard(util.set_bit(types.empty_bitboard, types.square.b1)) == 0x705);
 
     print("King attacks from g1 : 0xE0A0\n", .{});
-    try expect(attacks.king_attacks_from_bitboard(util.set_bit(types.empty_Bitboard, types.square.g1)) == 0xE0A0);
+    try expect(attacks.king_attacks_from_bitboard(util.set_bit(types.empty_bitboard, types.square.g1)) == 0xE0A0);
 
     print("King attacks from a2 : 0x30203\n", .{});
-    try expect(attacks.king_attacks_from_bitboard(util.set_bit(types.empty_Bitboard, types.square.a2)) == 0x30203);
+    try expect(attacks.king_attacks_from_bitboard(util.set_bit(types.empty_bitboard, types.square.a2)) == 0x30203);
 
     print("King attacks from h8 : 0x40C0000000000000\n", .{});
-    try expect(attacks.king_attacks_from_bitboard(util.set_bit(types.empty_Bitboard, types.square.h8)) == 0x40C0000000000000);
+    try expect(attacks.king_attacks_from_bitboard(util.set_bit(types.empty_bitboard, types.square.h8)) == 0x40C0000000000000);
 
     print("King attacks from e5 : 0x382838000000\n", .{});
-    try expect(attacks.king_attacks_from_bitboard(util.set_bit(types.empty_Bitboard, types.square.e5)) == 0x382838000000);
+    try expect(attacks.king_attacks_from_bitboard(util.set_bit(types.empty_bitboard, types.square.e5)) == 0x382838000000);
 }
 
 test "Knight attacks" {
     print("Knight attacks from e2 : 0x28441000\n", .{});
-    try expect(attacks.knight_attacks_from_bitboard(util.set_bit(types.empty_Bitboard, types.square.e2)) == 0x28440044);
+    try expect(attacks.knight_attacks_from_bitboard(util.set_bit(types.empty_bitboard, types.square.e2)) == 0x28440044);
 
     print("Knight attacks from e2 : 0x28440044\n", .{});
-    try expect(attacks.knight_attacks_from_bitboard(util.set_bit(types.empty_Bitboard, types.square.e2)) == 0x28440044);
+    try expect(attacks.knight_attacks_from_bitboard(util.set_bit(types.empty_bitboard, types.square.e2)) == 0x28440044);
 
     print("Knight attacks from a1 : 0x20400\n", .{});
-    try expect(attacks.knight_attacks_from_bitboard(util.set_bit(types.empty_Bitboard, types.square.a1)) == 0x20400);
+    try expect(attacks.knight_attacks_from_bitboard(util.set_bit(types.empty_bitboard, types.square.a1)) == 0x20400);
 
     print("Knight attacks from h1 : 0x402000\n", .{});
-    try expect(attacks.knight_attacks_from_bitboard(util.set_bit(types.empty_Bitboard, types.square.h1)) == 0x402000);
+    try expect(attacks.knight_attacks_from_bitboard(util.set_bit(types.empty_bitboard, types.square.h1)) == 0x402000);
 
     print("Knight attacks from a8 : 0x402000000000\n", .{});
-    try expect(attacks.knight_attacks_from_bitboard(util.set_bit(types.empty_Bitboard, types.square.a8)) == 0x4020000000000);
+    try expect(attacks.knight_attacks_from_bitboard(util.set_bit(types.empty_bitboard, types.square.a8)) == 0x4020000000000);
 
     print("Knight attacks from h8 : 0x20400000000000\n", .{});
-    try expect(attacks.knight_attacks_from_bitboard(util.set_bit(types.empty_Bitboard, types.square.h8)) == 0x20400000000000);
+    try expect(attacks.knight_attacks_from_bitboard(util.set_bit(types.empty_bitboard, types.square.h8)) == 0x20400000000000);
 
     print("Knight attacks from d4 : 0x142200221400\n", .{});
-    try expect(attacks.knight_attacks_from_bitboard(util.set_bit(types.empty_Bitboard, types.square.d4)) == 0x142200221400);
+    try expect(attacks.knight_attacks_from_bitboard(util.set_bit(types.empty_bitboard, types.square.d4)) == 0x142200221400);
 }
 
 test "PRNG produces expected first value for seed 0x123456789ABCDEF" {
@@ -169,55 +170,55 @@ test "PRNG produces expected first value for seed 0x123456789ABCDEF" {
 }
 
 test "rook attacks table with empty occupancy" {
-    attacks.init_rook_attackes();
-    for (types.square_number) |square| {
+    attacks.init_rook_attacks();
+    for (0..64) |square| {
         const sq6: u6 = @truncate(square);
         const expected = attacks.get_rook_attacks_for_init(sq6, 0);
-        const table_val = attacks.Rook_attacks[square][0];
+        const table_val = attacks.rook_attacks_table[square][0];
         print("Rook attacks for square {d} with empty occ: expected=0x{X}, got=0x{X}\n", .{ square, expected, table_val });
         try std.testing.expectEqual(@as(types.Bitboard, expected), table_val);
     }
 }
 
 test "rook attacks with one blocker" {
-    attacks.init_rook_attackes();
+    attacks.init_rook_attacks();
     const sq_idx: u8 = 27;
     const occ_single: u64 = (@as(u64, 1) << (3 + 5 * 8)); // blocker on d6
-    const occ_masked = occ_single & tabele.Rook_attackes_tabele[sq_idx];
-    const relevantBits = tabele.Rook_index_bit[sq_idx];
-    const magic = tabele.rook_magics[sq_idx];
+    const occ_masked = occ_single & tables.rook_attack_masks[sq_idx];
+    const relevantBits = tables.rook_index_bits[sq_idx];
+    const magic = tables.rook_magics[sq_idx];
     const shift8: u8 = 64 - relevantBits;
     const shift: u6 = @truncate(shift8);
     const idx = (@as(u64, occ_masked) *% magic) >> shift;
-    const table_attacks = attacks.Rook_attacks[sq_idx][@intCast(idx)];
+    const table_attacks = attacks.rook_attacks_table[sq_idx][@intCast(idx)];
     const expected = attacks.get_rook_attacks_for_init(@as(u6, sq_idx), occ_single);
     print("Rook attacks with blocker on square {d}: occ=0x{X}, idx={d}, table=0x{X}, expected=0x{X}\n", .{ sq_idx, occ_single, idx, table_attacks, expected });
     try std.testing.expectEqual(@as(types.Bitboard, expected), table_attacks);
 }
 
 test "bishop attacks table with empty occupancy" {
-    attacks.init_bishop_attackes();
-    for (types.square_number) |square| {
+    attacks.init_bishop_attacks();
+    for (0..64) |square| {
         const sq6: u6 = @truncate(square);
         const expected = attacks.get_bishop_attacks_for_init(sq6, 0);
-        const table_val = attacks.Bishop_attacks[square][0];
+        const table_val = attacks.bishop_attacks_table[square][0];
         print("Bishop attacks for square {d} with empty occ: expected=0x{X}, got=0x{X}\n", .{ square, expected, table_val });
         try std.testing.expectEqual(@as(types.Bitboard, expected), table_val);
     }
 }
 
 test "bishop attacks with one blocker" {
-    attacks.init_bishop_attackes();
+    attacks.init_bishop_attacks();
     const sq_idx: u8 = 27; // d4
     const occ_single: u64 = (@as(u64, 1) << 45); // blocker on f6
-    const mask = tabele.Bishops_attackes_tabele[sq_idx];
+    const mask = tables.bishop_attack_masks[sq_idx];
     const occ_masked = occ_single & mask;
-    const relevantBits = tabele.Bishop_index_bit[sq_idx];
-    const magic = tabele.bishop_magics[sq_idx];
+    const relevantBits = tables.bishop_index_bits[sq_idx];
+    const magic = tables.bishop_magics[sq_idx];
     const shift: u6 = @truncate(64 - relevantBits);
     const idx64 = (@as(u64, occ_masked) *% magic) >> shift;
     const idx: usize = @intCast(idx64);
-    const table_attacks = attacks.Bishop_attacks[sq_idx][idx];
+    const table_attacks = attacks.bishop_attacks_table[sq_idx][idx];
     const expected = attacks.get_bishop_attacks_for_init(@as(u6, sq_idx), occ_single);
     print("Bishop attacks with blocker on square {d}: occ=0x{X}, idx={d}, table=0x{X}, expected=0x{X}\n", .{ sq_idx, occ_single, idx, table_attacks, expected });
     try std.testing.expectEqual(@as(types.Bitboard, expected), table_attacks);
@@ -354,7 +355,7 @@ test "test fen parsing" {
         const expected = entry.value_ptr.*;
 
         var b = types.Board.new();
-        try bitboard.fan_pars(fen, &b);
+        try bitboard.parse_fen(fen, &b);
         print("\n=== Testing FEN: {s}\n", .{fen});
         print("  occupancy: expected=0x{x}, actual=0x{x}\n", .{ expected.occupancy, b.pieces_combined() });
         print("  en-passant: expected={s}, actual={s}\n", .{ expected.ep_str, if (b.enpassant == types.square.NO_SQUARE) "-" else types.SquareString.getSquareToString(b.enpassant) });
@@ -398,7 +399,7 @@ test "is square attacked" {
 
     for (test_vectors) |vector| {
         var board = types.Board.new();
-        try bitboard.fan_pars(vector.fen, &board);
+        try bitboard.parse_fen(vector.fen, &board);
 
         var generated_white_attacks: u64 = 0;
         var generated_black_attacks: u64 = 0;
@@ -439,7 +440,7 @@ test "Perft Test the move generation start position" {
     const depth: u8 = 5;
 
     var b = types.Board.new();
-    try bitboard.fan_pars(types.start_position, &b);
+    try bitboard.parse_fen(types.start_position, &b);
 
     const stats = if (b.side == types.Color.White)
         util.perft_detailed(types.Color.White, &b, depth)
@@ -463,7 +464,7 @@ test "Perft Test the move generation tricky position" {
     const depth: u8 = 4;
 
     var b = types.Board.new();
-    try bitboard.fan_pars(types.tricky_position, &b);
+    try bitboard.parse_fen(types.tricky_position, &b);
 
     const stats = if (b.side == types.Color.White)
         util.perft_detailed(types.Color.White, &b, depth)
@@ -483,76 +484,72 @@ test "Perft Test the move generation tricky position" {
     print("Perft test for the tricky position done\n", .{});
 }
 
-test "test piece evaluation" {
-    //TODO
-}
 
 test "test phase calculation" {
     attacks.init_attacks();
 
     print("\n--- Test 1: Starting Position ---\n", .{});
     var board = types.Board.new();
-    try bitboard.fan_pars(types.start_position, &board);
+    try bitboard.parse_fen(types.start_position, &board);
     print("FEN: {s}\n", .{types.start_position});
     print("Expected: White=16, Black=16 (P=0, N=1, B=1, R=3, Q=6, K=0 → 0+2+2+6+6+0=16 per side)\n", .{});
     try std.testing.expectEqual(eval.global_evaluator.phase[0], 16);
     try std.testing.expectEqual(eval.global_evaluator.phase[1], 16);
 
     print("\n--- Test 2: Empty Board ---\n", .{});
-    try bitboard.fan_pars(types.empty_board, &board);
+    try bitboard.parse_fen(types.empty_board, &board);
     print("FEN: {s}\n", .{types.empty_board});
     print("Expected: White=0, Black=0 (no pieces)\n", .{});
     try std.testing.expectEqual(eval.global_evaluator.phase[0], 0);
     try std.testing.expectEqual(eval.global_evaluator.phase[1], 0);
 
     print("\n--- Test 3: King vs King ---\n", .{});
-    try bitboard.fan_pars("8/8/8/8/8/8/8/K6k w - - 0 1", &board);
+    try bitboard.parse_fen("8/8/8/8/8/8/8/K6k w - - 0 1", &board);
     print("FEN: 8/8/8/8/8/8/8/K6k w - - 0 1\n", .{});
     print("Expected: White=0, Black=0 (only kings, K=0 phase)\n", .{});
     try std.testing.expectEqual(eval.global_evaluator.phase[0], 0);
     try std.testing.expectEqual(eval.global_evaluator.phase[1], 0);
 
     print("\n--- Test 4: Queen Endgame ---\n", .{});
-    try bitboard.fan_pars("8/8/8/8/8/8/8/KQ5k w - - 0 1", &board);
+    try bitboard.parse_fen("8/8/8/8/8/8/8/KQ5k w - - 0 1", &board);
     print("FEN: 8/8/8/8/8/8/8/KQ5k w - - 0 1\n", .{});
     print("Expected: White=6, Black=0 (white queen=6 phase)\n", .{});
     try std.testing.expectEqual(eval.global_evaluator.phase[0], 6); // white
     try std.testing.expectEqual(eval.global_evaluator.phase[1], 0); // black
 
     print("\n--- Test 5: Complex Middlegame ---\n", .{});
-    try bitboard.fan_pars(types.tricky_position, &board);
+    try bitboard.parse_fen(types.tricky_position, &board);
     print("FEN: {s}\n", .{types.tricky_position});
     print("Expected: Count all pieces - complex position\n", .{});
     try std.testing.expectEqual(eval.global_evaluator.phase[0], 16);
     try std.testing.expectEqual(eval.global_evaluator.phase[1], 16);
 
     print("\n--- Test 7: Move Making and Phase Updates ---\n", .{});
-    try bitboard.fan_pars(types.start_position, &board);
+    try bitboard.parse_fen(types.start_position, &board);
     print("Starting position phases: White={}, Black={}\n", .{ eval.global_evaluator.phase[0], eval.global_evaluator.phase[1] });
 
     var move_list: lists.MoveList = .{};
 
-    try bitboard.fan_pars("rnbqkb1r/pppp1ppp/5n2/4p1B1/4P3/8/PPPP1PPP/RNBQK1NR w KQkq e6 0 2", &board);
+    try bitboard.parse_fen("rnbqkb1r/pppp1ppp/5n2/4p1B1/4P3/8/PPPP1PPP/RNBQK1NR w KQkq e6 0 2", &board);
     print("\nAfter 1.e4 e5 - phases: White={}, Black={}\n", .{ eval.global_evaluator.phase[0], eval.global_evaluator.phase[1] });
 
-    move_gen.generate_moves(&board, &move_list, types.Color.White);
+    movegen.generate_legal_moves(&board, &move_list, types.Color.White);
 
     var capture_made = false;
     for (0..move_list.count) |i| {
         const move = move_list.moves[i];
-        if (move_gen.Print_move_list.is_capture(move)) {
+        if (move.is_capture()) {
             print("Making capture move: {s}{s}\n", .{ types.SquareString.getSquareToString(@enumFromInt(move.from)), types.SquareString.getSquareToString(@enumFromInt(move.to)) });
             const old_phase_w = eval.global_evaluator.phase[0];
             const old_phase_b = eval.global_evaluator.phase[1];
 
-            if (move_gen.make_move(&board, move)) {
-                print("Phases before capture: White={}, Black={}\n", .{ old_phase_w, old_phase_b });
-                print("Phases after capture:  White={}, Black={}\n", .{ eval.global_evaluator.phase[0], eval.global_evaluator.phase[1] });
-                capture_made = true;
-                try std.testing.expectEqual(eval.global_evaluator.phase[0], 16);
-                try std.testing.expectEqual(eval.global_evaluator.phase[1], 15);
-                break;
-            }
+            _ = move_gen.make_move_search(&board, move);
+            print("Phases before capture: White={}, Black={}\n", .{ old_phase_w, old_phase_b });
+            print("Phases after capture:  White={}, Black={}\n", .{ eval.global_evaluator.phase[0], eval.global_evaluator.phase[1] });
+            capture_made = true;
+            try std.testing.expectEqual(eval.global_evaluator.phase[0], 16);
+            try std.testing.expectEqual(eval.global_evaluator.phase[1], 15);
+            break;
         }
     }
 
@@ -561,28 +558,27 @@ test "test phase calculation" {
     }
 
     print("\n--- Test 8: Promotion Test ---\n", .{});
-    try bitboard.fan_pars("8/P7/8/8/8/8/8/K6k w - - 0 1", &board);
+    try bitboard.parse_fen("8/P7/8/8/8/8/8/K6k w - - 0 1", &board);
     print("Pawn promotion setup - phases: White={}, Black={}\n", .{ eval.global_evaluator.phase[0], eval.global_evaluator.phase[1] });
 
     move_list = .{};
-    move_gen.generate_moves(&board, &move_list, types.Color.White);
+    movegen.generate_legal_moves(&board, &move_list, types.Color.White);
 
     // Find and make a promotion
     for (0..move_list.count) |i| {
         const move = move_list.moves[i];
-        if (move_gen.Print_move_list.is_promotion(move) and move.flags == types.MoveFlags.PR_QUEEN) {
+        if (move.is_promotion() and move.flags == types.MoveFlags.PR_QUEEN) {
             print("Making promotion to queen: {s}{s}\n", .{ types.SquareString.getSquareToString(@enumFromInt(move.from)), types.SquareString.getSquareToString(@enumFromInt(move.to)) });
             const old_phase_w = eval.global_evaluator.phase[0];
             const old_phase_b = eval.global_evaluator.phase[1];
 
-            if (move_gen.make_move(&board, move)) {
-                print("Phases before promotion: White={}, Black={}\n", .{ old_phase_w, old_phase_b });
-                print("Phases after promotion:  White={}, Black={}\n", .{ eval.global_evaluator.phase[0], eval.global_evaluator.phase[1] });
-                print("Expected change: -0 (pawn) +6 (queen) = +6 for white\n", .{});
-                try std.testing.expectEqual(eval.global_evaluator.phase[0], 6);
-                try std.testing.expectEqual(eval.global_evaluator.phase[1], 0);
-                break;
-            }
+            _ = move_gen.make_move_search(&board, move);
+            print("Phases before promotion: White={}, Black={}\n", .{ old_phase_w, old_phase_b });
+            print("Phases after promotion:  White={}, Black={}\n", .{ eval.global_evaluator.phase[0], eval.global_evaluator.phase[1] });
+            print("Expected change: -0 (pawn) +6 (queen) = +6 for white\n", .{});
+            try std.testing.expectEqual(eval.global_evaluator.phase[0], 6);
+            try std.testing.expectEqual(eval.global_evaluator.phase[1], 0);
+            break;
         }
     }
 }
@@ -600,7 +596,7 @@ test "Zobrist hash consistency after moves" {
 
     for (test_fens) |fen| {
         var board = types.Board.new();
-        try bitboard.fan_pars(fen, &board);
+        try bitboard.parse_fen(fen, &board);
 
         // Verify initial hash matches full computation
         const initial_hash = zobrist.compute_hash(&board);
@@ -609,37 +605,71 @@ test "Zobrist hash consistency after moves" {
         // Generate all legal moves and verify hash after each
         var move_list: lists.MoveList = .{};
         if (board.side == types.Color.White) {
-            move_gen.generate_moves(&board, &move_list, types.Color.White);
+            movegen.generate_legal_moves(&board, &move_list, types.Color.White);
         } else {
-            move_gen.generate_moves(&board, &move_list, types.Color.Black);
+            movegen.generate_legal_moves(&board, &move_list, types.Color.Black);
         }
 
         for (0..move_list.count) |i| {
             const move = move_list.moves[i];
-            const saved_state = board.save_state();
-            const saved_eval = eval.global_evaluator;
 
-            if (move_gen.make_move(&board, move)) {
-                const expected_hash = zobrist.compute_hash(&board);
-                if (board.hash != expected_hash) {
-                    const from_str = types.SquareString.getSquareToString(@enumFromInt(move.from));
-                    const to_str = types.SquareString.getSquareToString(@enumFromInt(move.to));
-                    print("Hash mismatch after move {s}{s} (flags={}) in FEN: {s}\n", .{
-                        from_str, to_str, @intFromEnum(move.flags), fen,
-                    });
-                    print("  Incremental: 0x{x}\n  Recomputed:  0x{x}\n", .{ board.hash, expected_hash });
-                }
-                try std.testing.expectEqual(expected_hash, board.hash);
-
-                board.restore_state(saved_state);
-                eval.global_evaluator = saved_eval;
-                try std.testing.expectEqual(initial_hash, board.hash);
-            } else {
-                board.restore_state(saved_state);
-                eval.global_evaluator = saved_eval;
+            const undo = move_gen.make_move_search(&board, move);
+            const expected_hash = zobrist.compute_hash(&board);
+            if (board.hash != expected_hash) {
+                const from_str = types.SquareString.getSquareToString(@enumFromInt(move.from));
+                const to_str = types.SquareString.getSquareToString(@enumFromInt(move.to));
+                print("Hash mismatch after move {s}{s} (flags={}) in FEN: {s}\n", .{
+                    from_str, to_str, @intFromEnum(move.flags), fen,
+                });
+                print("  Incremental: 0x{x}\n  Recomputed:  0x{x}\n", .{ board.hash, expected_hash });
             }
+            try std.testing.expectEqual(expected_hash, board.hash);
+
+            move_gen.unmake_move_search(&board, move, undo);
+            try std.testing.expectEqual(initial_hash, board.hash);
         }
     }
+}
+
+fn run_perft_legal_bench(fen: []const u8, name: []const u8, depth: u8, expected: u64) !void {
+    var board = types.Board.new();
+    try bitboard.parse_fen(fen, &board);
+    var timer = std.time.Timer.start() catch unreachable;
+    const nodes: u64 = if (board.side == types.Color.White)
+        util.perft_legal(types.Color.White, &board, depth)
+    else
+        util.perft_legal(types.Color.Black, &board, depth);
+    const elapsed_ns = timer.read();
+    const elapsed_ms = elapsed_ns / std.time.ns_per_ms;
+    const mnps = if (elapsed_ns > 0) @as(f64, @floatFromInt(nodes)) / @as(f64, @floatFromInt(elapsed_ns)) * 1000.0 else 0.0;
+    print("{s}: {d} nodes, {d}ms, {d:.2} MNodes/s\n", .{ name, nodes, elapsed_ms, mnps });
+    try std.testing.expectEqual(expected, nodes);
+}
+
+test "Legal perft startpos d5" {
+    attacks.init_attacks();
+    print("\n=== LEGAL PERFT BENCHMARK ===\n", .{});
+    try run_perft_legal_bench(types.start_position, "legal startpos d5", 5, 4865609);
+}
+
+test "Legal perft kiwipete d4" {
+    attacks.init_attacks();
+    try run_perft_legal_bench(types.tricky_position, "legal kiwipete d4", 4, 4085603);
+}
+
+test "Legal perft edwards d4" {
+    attacks.init_attacks();
+    try run_perft_legal_bench("r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 10", "legal edwards d4", 4, 3894594);
+}
+
+test "Legal perft ep_tricky d5" {
+    attacks.init_attacks();
+    try run_perft_legal_bench("8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1", "legal ep_tricky d5", 5, 674624);
+}
+
+test "Legal perft promo d5" {
+    attacks.init_attacks();
+    try run_perft_legal_bench(types.killer_position, "legal promo d5", 5, 36112837);
 }
 
 test "test evaluation end games" {
@@ -666,7 +696,7 @@ test "test evaluation end games" {
 
     for (tests, 0..) |test_case, i| {
         var board = types.Board.new();
-        try bitboard.fan_pars(test_case.fen, &board);
+        try bitboard.parse_fen(test_case.fen, &board);
 
         const evaluation = eval.global_evaluator.eval(board, types.Color.White);
         const min_expected = test_case.expected_range[0];

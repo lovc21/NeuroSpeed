@@ -5,7 +5,8 @@ const types = @import("types.zig");
 const util = @import("util.zig");
 const attacks = @import("attacks.zig");
 const lists = @import("lists.zig");
-const move_gen = @import("move_generation.zig");
+const move_gen = @import("move.zig");
+const movegen = @import("movegen.zig");
 const move_scores = @import("score_moves.zig");
 const uci = @import("uci.zig");
 const eval = @import("evaluation.zig");
@@ -47,23 +48,23 @@ fn print_moves_and_scores(move_list: *const lists.MoveList, score_list: *const l
         const to_sq = types.SquareString.getSquareToString(@enumFromInt(move.to));
 
         var move_type: []const u8 = "Quiet";
-        if (move_gen.Print_move_list.is_promotion(move) and move_gen.Print_move_list.is_capture(move)) {
+        if (move.is_promotion() and move.is_capture()) {
             move_type = "Promo+Capture";
-        } else if (move_gen.Print_move_list.is_capture(move)) {
+        } else if (move.is_capture()) {
             move_type = "Capture";
-        } else if (move_gen.Print_move_list.is_promotion(move)) {
+        } else if (move.is_promotion()) {
             move_type = "Promotion";
-        } else if (move_gen.Print_move_list.is_castling(move)) {
+        } else if (move.is_castling()) {
             move_type = "Castling";
-        } else if (move_gen.Print_move_list.is_en_passant(move)) {
+        } else if (move.is_en_passant()) {
             move_type = "En Passant";
-        } else if (move_gen.Print_move_list.is_double_push(move)) {
+        } else if (move.is_double_push()) {
             move_type = "Double Push";
         }
 
         var promotion_char: u8 = ' ';
-        if (move_gen.Print_move_list.is_promotion(move)) {
-            promotion_char = move_gen.Print_move_list.get_promotion_char(move);
+        if (move.is_promotion()) {
+            promotion_char = move.promotion_char();
         }
 
         if (promotion_char != ' ') {
@@ -103,13 +104,13 @@ pub fn main() !void {
         attacks.init_attacks();
 
         var board = types.Board.new();
-        bitboard.fan_pars(types.tricky_position, &board) catch {
+        bitboard.parse_fen(types.tricky_position, &board) catch {
             print("Error parsing fen in the new uci function\n", .{});
         };
 
         var move_list: lists.MoveList = .{};
         var score_list: lists.ScoreList = .{};
-        move_gen.generate_moves(&board, &move_list, types.Color.White);
+        movegen.generate_legal_moves(&board, &move_list, types.Color.White);
         move_scores.score_move(&board, &move_list, &score_list, move_gen.Move.empty(), move_gen.Move.empty());
 
         bitboard.print_unicode_board(board);
@@ -157,7 +158,7 @@ fn run_bench(depth: u8) void {
 
     for (bench_positions) |fen| {
         var board = types.Board.new();
-        bitboard.fan_pars(fen, &board) catch continue;
+        bitboard.parse_fen(fen, &board) catch continue;
 
         search.init_search();
 

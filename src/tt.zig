@@ -1,6 +1,6 @@
 const std = @import("std");
 const types = @import("types.zig");
-const move_gen = @import("move_generation.zig");
+const move_gen = @import("move.zig");
 const Move = move_gen.Move;
 
 // Transposition Table entry flags

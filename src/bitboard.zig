@@ -2,7 +2,7 @@ const std = @import("std");
 const util = @import("util.zig");
 const types = @import("types.zig");
 const attacks = @import("attacks.zig");
-const tables = @import("tabeles.zig");
+const tables = @import("tables.zig");
 const eval = @import("evaluation.zig");
 const zobrist = @import("zobrist.zig");
 const print = std.debug.print;
@@ -36,7 +36,7 @@ pub fn print_unicode_board(board: types.Board) void {
             for (0..types.Board.PieceCount) |i| {
                 const bb = board.pieces[i];
                 if (util.get_bit(bb, square)) {
-                    print(" {s}", .{types.unicodePice[i]});
+                    print(" {s}", .{types.unicode_piece[i]});
                     printed = true;
                     break;
                 }
@@ -91,43 +91,6 @@ pub fn print_unicode_board(board: types.Board) void {
     print(" Bitboard: 0b{b}\n\n", .{board.pieces_combined()});
 }
 
-pub fn print_attacked_squares(board: *types.Board) void {
-    const occ = board.pieces_combined();
-    const bbs = board.pieces;
-    const side = board.side;
-
-    print("\n", .{});
-
-    for (0..8) |rank| {
-        print("  {} ", .{8 - rank});
-        for (0..8) |file| {
-            const square: u6 = @intCast((7 - rank) * 8 + file);
-            const attacked = switch (side) {
-                .White => (attacks.pawn_attacks_from_square(square, .Black) & bbs[@intFromEnum(types.Piece.WHITE_PAWN)]) != 0 or
-                    (attacks.piece_attacks(square, occ, types.PieceType.Knight) & bbs[@intFromEnum(types.Piece.WHITE_KNIGHT)]) != 0 or
-                    (attacks.piece_attacks(square, occ, types.PieceType.Bishop) & bbs[@intFromEnum(types.Piece.WHITE_BISHOP)]) != 0 or
-                    (attacks.piece_attacks(square, occ, types.PieceType.Rook) & bbs[@intFromEnum(types.Piece.WHITE_ROOK)]) != 0 or
-                    (attacks.get_queen_attacks(square, occ) & bbs[@intFromEnum(types.Piece.WHITE_QUEEN)]) != 0 or
-                    (attacks.piece_attacks(square, occ, types.PieceType.King) & bbs[@intFromEnum(types.Piece.WHITE_KING)]) != 0,
-
-                .Black => (attacks.pawn_attacks_from_square(square, .White) & bbs[@intFromEnum(types.Piece.BLACK_PAWN)]) != 0 or
-                    (attacks.piece_attacks(square, occ, types.PieceType.Knight) & bbs[@intFromEnum(types.Piece.BLACK_KNIGHT)]) != 0 or
-                    (attacks.piece_attacks(square, occ, types.PieceType.Bishop) & bbs[@intFromEnum(types.Piece.BLACK_BISHOP)]) != 0 or
-                    (attacks.piece_attacks(square, occ, types.PieceType.Rook) & bbs[@intFromEnum(types.Piece.BLACK_ROOK)]) != 0 or
-                    (attacks.get_queen_attacks(square, occ) & bbs[@intFromEnum(types.Piece.BLACK_QUEEN)]) != 0 or
-                    (attacks.piece_attacks(square, occ, types.PieceType.King) & bbs[@intFromEnum(types.Piece.BLACK_KING)]) != 0,
-
-                else => unreachable,
-            };
-            const ch: u8 = if (attacked) 'X' else '.';
-            print(" {c} ", .{ch});
-        }
-        print("\n", .{});
-    }
-
-    print("\n   a  b  c  d  e  f  g  h\n", .{});
-}
-
 pub fn is_square_attacked(
     board: *const types.Board,
     square: u6,
@@ -173,25 +136,6 @@ pub fn is_square_attacked(
     };
 }
 
-pub fn print_attacked_squares_new(board: *types.Board) void {
-    print("\n", .{});
-    print("--- Attacked squares for side: {} ---\n", .{board.side});
-
-    for (0..8) |rank| {
-        print("  {} ", .{8 - rank});
-        for (0..8) |file| {
-            const square: u6 = @intCast((7 - rank) * 8 + file);
-
-            const attacked = is_square_attacked(board, square, board.side);
-            const ch: u8 = if (attacked) 'X' else '.';
-            print(" {c} ", .{ch});
-        }
-        print("\n", .{});
-    }
-
-    print("\n   a  b  c  d  e  f  g  h\n", .{});
-}
-
 pub const FenError = error{
     InvalidFormat,
     InvalidPosition,
@@ -199,7 +143,7 @@ pub const FenError = error{
     InvalidEnPassant,
 };
 
-pub fn fan_pars(fen: []const u8, board: *types.Board) !void {
+pub fn parse_fen(fen: []const u8, board: *types.Board) !void {
     var it = std.mem.tokenizeAny(u8, fen, " ");
     const placement = it.next() orelse return FenError.InvalidFormat;
     const active = it.next() orelse return FenError.InvalidFormat;
@@ -209,8 +153,9 @@ pub fn fan_pars(fen: []const u8, board: *types.Board) !void {
     // Reset the board
     @memset(board.pieces[0..], 0);
     @memset(board.board[0..], types.Piece.NO_PIECE);
+    board.halfmove = 0;
     // Reset the global evaluator
-    eval.global_evaluator = eval.Evaluat.init_empty();
+    eval.global_evaluator = eval.Evaluator.init_empty();
 
     //  parse placement
     var rank: usize = 0;
@@ -287,6 +232,11 @@ pub fn fan_pars(fen: []const u8, board: *types.Board) !void {
         board.enpassant = @enumFromInt(idx);
     } else {
         return FenError.InvalidEnPassant;
+    }
+
+    // Half-move clock (field 5, optional)
+    if (it.next()) |hm| {
+        board.halfmove = std.fmt.parseUnsigned(u16, hm, 10) catch 0;
     }
 
     // Compute Zobrist hash from scratch
