@@ -1,10 +1,10 @@
 const std = @import("std");
 const types = @import("types.zig");
 const lists = @import("lists.zig");
-const move_gen = @import("move_generation.zig");
+const move_gen = @import("move.zig");
 const attacks = @import("attacks.zig");
 const Bitboard = @import("bitboard.zig");
-const eval = @import("evaluation.zig");
+const movegen = @import("movegen.zig");
 const print = std.debug.print;
 
 pub inline fn set_bit(bitboard: u64, s: types.square) u64 {
@@ -51,84 +51,6 @@ pub const PRNG = struct {
 // flip bitboard vertically (rank 1 <-> rank 8)
 pub fn flip_bitboard_vertically(bb: u64) u64 {
     return @byteSwap(bb);
-}
-
-// performance test (PERFT)
-pub inline fn perft(comptime color: types.Color, board: *types.Board, depth: u8) u64 {
-    // Exit condition
-    if (depth == 0) return 1;
-
-    var nodes: u64 = 0;
-
-    const oponent_side = if (color == types.Color.White) types.Color.Black else types.Color.White;
-
-    // Generate all moves
-
-    var move_list: lists.MoveList = .{};
-    move_gen.generate_moves(board, &move_list, color);
-
-    for (0..move_list.count) |i| {
-        const move = move_list.moves[i];
-
-        // Make the move
-        const original_state = board.save_state();
-        const saved_evaluator = eval.global_evaluator;
-        if (move_gen.make_move(board, move)) {
-            const result = perft(oponent_side, board, depth - 1);
-            board.restore_state(original_state);
-            eval.global_evaluator = saved_evaluator;
-            nodes += result;
-        } else {
-            board.restore_state(original_state);
-            eval.global_evaluator = saved_evaluator;
-        }
-    }
-
-    return nodes;
-}
-
-pub inline fn perft_test(board: *types.Board, depth: u8) void {
-    print("Running perft test with depth {d}\n", .{depth});
-
-    var timer = std.time.Timer.start() catch unreachable;
-    var nodes: usize = 0;
-
-    if (board.side == types.Color.White) {
-        nodes = perft(types.Color.White, board, depth);
-    } else {
-        nodes = perft(types.Color.Black, board, depth);
-    }
-
-    const elapsed = timer.read();
-    print("Perft test took {d} ms\n", .{elapsed / std.time.ns_per_ms});
-    print("Nodes: {d}\n", .{nodes});
-}
-
-pub fn perft_div(comptime color: types.Color, board: *types.Board, depth: u8) void {
-    var nodes: usize = 0;
-    var branch: usize = 0;
-
-    var move_list: lists.MoveList = .{};
-    move_gen.generate_moves(board, &move_list, color);
-
-    for (0..move_list.count) |i| {
-        const move = move_list.moves[i];
-
-        // Make the move
-        const original_state = board.save_state();
-        if (move_gen.make_move(board, move)) {
-            if (branch == 0) {
-                nodes += perft(color, board, depth - 1);
-            } else {
-                nodes += perft(color, board, depth);
-            }
-            board.restore_state(original_state);
-        }
-
-        branch += 1;
-    }
-    print("Nodes: {d}\n", .{nodes});
-    print("Branches: {d}\n", .{branch});
 }
 
 pub const PerftStats = struct {
@@ -182,24 +104,6 @@ pub const PerftStats = struct {
         print("==============================\n", .{});
     }
 };
-
-inline fn is_capture_move_perft(flags: types.MoveFlags) bool {
-    return switch (flags) {
-        types.MoveFlags.CAPTURE, types.MoveFlags.EN_PASSANT, types.MoveFlags.PC_QUEEN, types.MoveFlags.PC_ROOK, types.MoveFlags.PC_BISHOP, types.MoveFlags.PC_KNIGHT => true,
-        else => false,
-    };
-}
-
-inline fn is_promotion_move_perft(flags: types.MoveFlags) bool {
-    return switch (flags) {
-        types.MoveFlags.PR_QUEEN, types.MoveFlags.PR_ROOK, types.MoveFlags.PR_BISHOP, types.MoveFlags.PR_KNIGHT, types.MoveFlags.PC_QUEEN, types.MoveFlags.PC_ROOK, types.MoveFlags.PC_BISHOP, types.MoveFlags.PC_KNIGHT => true,
-        else => false,
-    };
-}
-
-inline fn is_castling_move_perft(flags: types.MoveFlags) bool {
-    return flags == types.MoveFlags.OO or flags == types.MoveFlags.OOO;
-}
 
 fn count_attackers_to_square(board: *types.Board, square: u6, by_side: types.Color) u8 {
     var count: u8 = 0;
@@ -261,118 +165,73 @@ pub fn perft_detailed(comptime color: types.Color, board: *types.Board, depth: u
 
     const opponent_side = if (color == types.Color.White) types.Color.Black else types.Color.White;
     var move_list: lists.MoveList = .{};
-    move_gen.generate_moves(board, &move_list, color);
+    movegen.generate_legal_moves(board, &move_list, color);
 
     if (depth == 1) {
-        // At depth 1, we just count the moves and their properties
         for (0..move_list.count) |i| {
             const move = move_list.moves[i];
-            const original_state = board.save_state();
-            const saved_evaluator = eval.global_evaluator;
+            const undo = move_gen.make_move_search(board, move);
 
-            if (move_gen.make_move(board, move)) {
-                stats.nodes += 1;
+            stats.nodes += 1;
 
-                // Count move types
-                if (is_capture_move_perft(move.flags)) {
-                    stats.captures += 1;
-                }
-                if (move.flags == types.MoveFlags.EN_PASSANT) {
-                    stats.en_passant += 1;
-                }
-                if (is_castling_move_perft(move.flags)) {
-                    stats.castles += 1;
-                }
-                if (is_promotion_move_perft(move.flags)) {
-                    stats.promotions += 1;
-                }
+            if (move.is_capture()) stats.captures += 1;
+            if (move.flags == types.MoveFlags.EN_PASSANT) stats.en_passant += 1;
+            if (move.is_castling()) stats.castles += 1;
+            if (move.is_promotion()) stats.promotions += 1;
 
-                // Check for checks
-                const opponent_king_piece = if (opponent_side == types.Color.White) types.Piece.WHITE_KING else types.Piece.BLACK_KING;
-                const opponent_king_square: u6 = @intCast(lsb_index(board.pieces[@intFromEnum(opponent_king_piece)]));
+            // Check for checks
+            const opponent_king_piece = if (opponent_side == types.Color.White) types.Piece.WHITE_KING else types.Piece.BLACK_KING;
+            const opponent_king_square: u6 = @intCast(lsb_index(board.pieces[@intFromEnum(opponent_king_piece)]));
 
-                if (Bitboard.is_square_attacked(board, opponent_king_square, color)) {
-                    stats.checks += 1;
+            if (Bitboard.is_square_attacked(board, opponent_king_square, color)) {
+                stats.checks += 1;
 
-                    // Count the number of attackers to determine if it's a double check
-                    const attacker_count = count_attackers_to_square(board, opponent_king_square, color);
-                    if (attacker_count >= 2) {
-                        stats.double_checks += 1;
-                    }
+                const attacker_count = count_attackers_to_square(board, opponent_king_square, color);
+                if (attacker_count >= 2) stats.double_checks += 1;
 
-                    // Check for checkmate
-                    var opponent_moves: lists.MoveList = .{};
-                    move_gen.generate_moves(board, &opponent_moves, opponent_side);
-
-                    var has_legal_move = false;
-                    for (0..opponent_moves.count) |j| {
-                        const opponent_move = opponent_moves.moves[j];
-                        const opponent_state = board.save_state();
-                        const opponent_saved_evaluator = eval.global_evaluator;
-                        if (move_gen.make_move(board, opponent_move)) {
-                            has_legal_move = true;
-                            board.restore_state(opponent_state);
-                            break;
-                        }
-                        eval.global_evaluator = saved_evaluator;
-                        board.restore_state(opponent_state);
-                        eval.global_evaluator = opponent_saved_evaluator;
-                    }
-
-                    if (!has_legal_move) {
-                        stats.checkmates += 1;
-                    }
-                }
-                eval.global_evaluator = saved_evaluator;
-                board.restore_state(original_state);
+                // Check for checkmate: legal movegen means count == 0 is checkmate
+                var opponent_moves: lists.MoveList = .{};
+                movegen.generate_legal_moves(board, &opponent_moves, opponent_side);
+                if (opponent_moves.count == 0) stats.checkmates += 1;
             }
+
+            move_gen.unmake_move_search(board, move, undo);
         }
     } else {
-        // Recursive case
         for (0..move_list.count) |i| {
             const move = move_list.moves[i];
-            const original_state = board.save_state();
-            const saved_evaluator = eval.global_evaluator;
-
-            if (move_gen.make_move(board, move)) {
-                const sub_stats = perft_detailed(opponent_side, board, depth - 1);
-                stats.add(sub_stats);
-
-                board.restore_state(original_state);
-                eval.global_evaluator = saved_evaluator;
-            } else {
-                board.restore_state(original_state);
-                eval.global_evaluator = saved_evaluator;
-            }
+            const undo = move_gen.make_move_search(board, move);
+            const sub_stats = perft_detailed(opponent_side, board, depth - 1);
+            stats.add(sub_stats);
+            move_gen.unmake_move_search(board, move, undo);
         }
     }
 
     return stats;
 }
 
-pub fn perft_test_detailed(board: *types.Board, depth: u8) void {
-    print("\n=== Starting Detailed Perft Test ===\n", .{});
-    Bitboard.print_unicode_board(board.*);
-    print("Depth: {d}\n", .{depth});
-    print("Side to move: {s}\n", .{if (board.side == types.Color.White) "White" else "Black"});
+// Perft using legal move generation with fast play/undo (no zobrist, no eval)
+pub fn perft_legal(comptime color: types.Color, board: *types.Board, depth: u8) u64 {
+    if (depth == 0) return 1;
 
-    var timer = std.time.Timer.start() catch unreachable;
+    const opponent_side = if (color == types.Color.White) types.Color.Black else types.Color.White;
 
-    const stats = if (board.side == types.Color.White)
-        perft_detailed(types.Color.White, board, depth)
-    else
-        perft_detailed(types.Color.Black, board, depth);
+    // Generate only legal moves
+    var move_list: lists.MoveList = .{};
+    movegen.generate_legal_moves(board, &move_list, color);
 
-    const elapsed = timer.read();
+    // Bulk counting: at depth 1, just return the count of legal moves
+    if (depth == 1) return move_list.count;
 
-    stats.display(depth);
+    var nodes: u64 = 0;
+    for (0..move_list.count) |i| {
+        const move = move_list.moves[i];
 
-    const elapsed_ms = @as(f64, @floatFromInt(elapsed)) / @as(f64, std.time.ns_per_ms);
-    const elapsed_s = elapsed_ms / 1000.0;
-    print("Time elapsed: {d:.2} ms ({d:.6} seconds)\n", .{ elapsed_ms, elapsed_s });
-
-    if (elapsed_s > 0) {
-        const nps = @as(f64, @floatFromInt(stats.nodes)) / elapsed_s;
-        print("Nodes per second: {d:.0}\n", .{nps});
+        // Fast play/undo: ~4 bytes of undo info instead of 200-byte board copy
+        const undo = move_gen.make_move_perft(board, move);
+        nodes += perft_legal(opponent_side, board, depth - 1);
+        move_gen.unmake_move_perft(board, move, undo);
     }
+
+    return nodes;
 }

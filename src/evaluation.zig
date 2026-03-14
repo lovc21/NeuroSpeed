@@ -1,5 +1,5 @@
 const std = @import("std");
-const tabeles = @import("tabeles.zig");
+const tables = @import("tables.zig");
 const attacks = @import("attacks.zig");
 const types = @import("types.zig");
 const nnue = @import("nnue.zig");
@@ -7,7 +7,7 @@ const print = std.debug.print;
 const util = @import("util.zig");
 
 // Position Evaluation
-pub var global_evaluator: Evaluat = Evaluat.init_empty();
+pub var global_evaluator: Evaluator = Evaluator.init_empty();
 
 // tempo bonus
 const mid_game_tempo_bonus = 15;
@@ -178,15 +178,15 @@ const end_game_tables: [6][64]i16 = .{
     end_game_king_table,
 };
 
-pub const Evaluat = struct {
+pub const Evaluator = struct {
     mid_game_eval: i32,
     end_game_eval: i32,
     phase: [2]u8 = [1]u8{0} ** 2,
     material_mg: i32,
     material_eg: i32,
 
-    pub fn init_empty() Evaluat {
-        return Evaluat{
+    pub fn init_empty() Evaluator {
+        return Evaluator{
             .mid_game_eval = 0,
             .end_game_eval = 0,
             .phase = [1]u8{0} ** 2,
@@ -195,7 +195,7 @@ pub const Evaluat = struct {
         };
     }
 
-    pub inline fn add_piece_material(self: *Evaluat, piece: types.Piece) void {
+    pub inline fn add_piece_material(self: *Evaluator, piece: types.Piece) void {
         const piece_type_idx = get_piece_type_index(piece);
         const color_multiplier: i32 = if (get_piece_color_index(piece) == 0) 1 else -1;
 
@@ -203,7 +203,7 @@ pub const Evaluat = struct {
         self.material_eg += end_game_material_score[piece_type_idx] * color_multiplier;
     }
 
-    pub inline fn remove_piece_material(self: *Evaluat, piece: types.Piece) void {
+    pub inline fn remove_piece_material(self: *Evaluator, piece: types.Piece) void {
         const piece_type_idx = get_piece_type_index(piece);
         const color_multiplier: i32 = if (get_piece_color_index(piece) == 0) 1 else -1;
 
@@ -212,7 +212,7 @@ pub const Evaluat = struct {
     }
 
     // Initialize material from board position
-    pub fn calculate_initial_material(self: *Evaluat, board: *const types.Board) void {
+    pub fn calculate_initial_material(self: *Evaluator, board: *const types.Board) void {
         self.material_mg = 0;
         self.material_eg = 0;
 
@@ -230,7 +230,7 @@ pub const Evaluat = struct {
     }
 
     // Initialize both phase and material from board
-    pub fn calculate_initial_phase_and_material(self: *Evaluat, board: *const types.Board) void {
+    pub fn calculate_initial_phase_and_material(self: *Evaluator, board: *const types.Board) void {
         self.phase = [1]u8{0} ** 2;
         self.material_mg = 0;
         self.material_eg = 0;
@@ -260,14 +260,14 @@ pub const Evaluat = struct {
         }
     }
 
-    pub inline fn put_piece_phase(self: *Evaluat, piece: types.Piece) void {
+    pub inline fn put_piece_phase(self: *Evaluator, piece: types.Piece) void {
         const piece_type_idx = get_piece_type_index(piece);
         const color_idx = get_piece_color_index(piece);
 
         self.phase[color_idx] += game_phase_inc[piece_type_idx];
     }
 
-    pub inline fn remove_piece_phase(self: *Evaluat, piece: types.Piece) void {
+    pub inline fn remove_piece_phase(self: *Evaluator, piece: types.Piece) void {
         const piece_type_idx = get_piece_type_index(piece);
         const color_idx = get_piece_color_index(piece);
 
@@ -276,7 +276,7 @@ pub const Evaluat = struct {
         }
     }
 
-    pub inline fn move_piece_phase(self: *Evaluat, captured_piece: types.Piece) void {
+    pub inline fn move_piece_phase(self: *Evaluator, captured_piece: types.Piece) void {
         // Only update for captured piece (moving piece doesn't change phase)
         if (captured_piece != types.Piece.NO_PIECE) {
             self.remove_piece_phase(captured_piece);
@@ -284,7 +284,7 @@ pub const Evaluat = struct {
     }
 
     // Calculate initial phase from board
-    pub fn calculate_initial_phase(self: *Evaluat, board: *const types.Board) void {
+    pub fn calculate_initial_phase(self: *Evaluator, board: *const types.Board) void {
         self.phase = [1]u8{0} ** 2;
 
         // Count white pieces
@@ -302,8 +302,8 @@ pub const Evaluat = struct {
         }
     }
 
-    pub fn hce_eval(self: Evaluat, board: types.Board, comptime color: types.Color) i32 {
-        if (Evaluat.is_draw(board)) {
+    pub fn hce_eval(self: Evaluator, board: types.Board, comptime color: types.Color) i32 {
+        if (Evaluator.is_draw(board)) {
             return 0;
         }
 
@@ -325,7 +325,7 @@ pub const Evaluat = struct {
         return if (color == types.Color.White) score + tempo_bonus else -(score + tempo_bonus);
     }
 
-    pub fn eval(self: Evaluat, board: types.Board, comptime color: types.Color) i32 {
+    pub fn eval(self: Evaluator, board: types.Board, comptime color: types.Color) i32 {
         if (nnue.use_nnue) {
             // use NNUE to evaluate the board here
             const score = 0;
@@ -335,7 +335,7 @@ pub const Evaluat = struct {
         }
     }
 
-    inline fn evaluate_special_endgames(self: Evaluat, board: *const types.Board) i32 {
+    inline fn evaluate_special_endgames(self: Evaluator, board: *const types.Board) i32 {
         var endgame_bonus: i32 = 0;
 
         const white_phase = self.phase[types.Color.White.toU4()];
@@ -435,7 +435,7 @@ pub const Evaluat = struct {
         const white_queen = board.pieces[types.Piece.WHITE_QUEEN.toU4()];
         const white_king = board.pieces[types.Piece.WHITE_KING.toU4()];
         const white_king_square = if (white_king != 0) util.lsb_index(white_king) else 0;
-        const white_king_zone = if (white_king_square < 64) tabeles.King_areas[white_king_square] else 0;
+        const white_king_zone = if (white_king_square < 64) tables.king_areas[white_king_square] else 0;
         var white_danger_score: i32 = 0;
         var white_danger_pieces: u5 = 0;
         var white_att: u64 = 0;
@@ -449,7 +449,7 @@ pub const Evaluat = struct {
         const black_queen = board.pieces[types.Piece.BLACK_QUEEN.toU4()];
         const black_king = board.pieces[types.Piece.BLACK_KING.toU4()];
         const black_king_square = if (black_king != 0) util.lsb_index(black_king) else 0;
-        const black_king_zone = if (black_king_square < 64) tabeles.King_areas[black_king_square] else 0;
+        const black_king_zone = if (black_king_square < 64) tables.king_areas[black_king_square] else 0;
         var black_danger_score: i32 = 0;
         var black_danger_pieces: u5 = 0;
         var black_att: u64 = 0;
@@ -491,28 +491,28 @@ pub const Evaluat = struct {
                 if (color == types.Color.White) {
                     // White pawns move up (increasing rank)
                     for (rank + 1..8) |r| {
-                        file_mask |= types.squar_bb[r * 8 + file];
-                        if (file > 0) file_mask |= types.squar_bb[r * 8 + (file - 1)];
-                        if (file < 7) file_mask |= types.squar_bb[r * 8 + (file + 1)];
+                        file_mask |= types.square_bb[r * 8 + file];
+                        if (file > 0) file_mask |= types.square_bb[r * 8 + (file - 1)];
+                        if (file < 7) file_mask |= types.square_bb[r * 8 + (file + 1)];
                     }
                     // Check no enemy pawns block or attack the path
                     front_mask = file_mask & enemy_pawns;
                     // Also check no friendly pawns in front
                     const front_file = types.mask_file[file] & ~((@as(u64, 1) << @intCast(pawn_sq)) - 1);
-                    return front_mask == 0 and (own_pawns & front_file) == types.squar_bb[pawn_sq];
+                    return front_mask == 0 and (own_pawns & front_file) == types.square_bb[pawn_sq];
                 } else {
                     // Black pawns move down (decreasing rank)
                     var r: i8 = @intCast(rank);
                     r -= 1;
                     while (r >= 0) : (r -= 1) {
                         const ur: u6 = @intCast(r);
-                        file_mask |= types.squar_bb[ur * 8 + file];
-                        if (file > 0) file_mask |= types.squar_bb[ur * 8 + (file - 1)];
-                        if (file < 7) file_mask |= types.squar_bb[ur * 8 + (file + 1)];
+                        file_mask |= types.square_bb[ur * 8 + file];
+                        if (file > 0) file_mask |= types.square_bb[ur * 8 + (file - 1)];
+                        if (file < 7) file_mask |= types.square_bb[ur * 8 + (file + 1)];
                     }
                     front_mask = file_mask & enemy_pawns;
                     const front_file = types.mask_file[file] & ((@as(u64, 1) << @intCast(pawn_sq + 1)) - 1);
-                    return front_mask == 0 and (own_pawns & front_file) == types.squar_bb[pawn_sq];
+                    return front_mask == 0 and (own_pawns & front_file) == types.square_bb[pawn_sq];
                 }
             }
         }.call;
@@ -537,17 +537,17 @@ pub const Evaluat = struct {
                 // Must be in enemy territory and defended by own pawn
                 if (color == types.Color.White and rank < 4) return false;
                 if (color == types.Color.Black and rank > 3) return false;
-                if ((own_pawn_attacks & types.squar_bb[sq]) == 0) return false;
+                if ((own_pawn_attacks & types.square_bb[sq]) == 0) return false;
 
                 // No enemy pawns can attack this square
                 var attack_mask: u64 = 0;
                 if (color == types.Color.White) {
                     // Check if black pawns can attack this square
-                    if (file > 0 and rank > 0) attack_mask |= types.squar_bb[(rank - 1) * 8 + (file - 1)];
-                    if (file < 7 and rank > 0) attack_mask |= types.squar_bb[(rank - 1) * 8 + (file + 1)];
+                    if (file > 0 and rank > 0) attack_mask |= types.square_bb[(rank - 1) * 8 + (file - 1)];
+                    if (file < 7 and rank > 0) attack_mask |= types.square_bb[(rank - 1) * 8 + (file + 1)];
                 } else {
-                    if (file > 0 and rank < 7) attack_mask |= types.squar_bb[(rank + 1) * 8 + (file - 1)];
-                    if (file < 7 and rank < 7) attack_mask |= types.squar_bb[(rank + 1) * 8 + (file + 1)];
+                    if (file > 0 and rank < 7) attack_mask |= types.square_bb[(rank + 1) * 8 + (file - 1)];
+                    if (file < 7 and rank < 7) attack_mask |= types.square_bb[(rank + 1) * 8 + (file + 1)];
                 }
                 return (enemy_pawns & attack_mask) == 0;
             }
@@ -580,13 +580,13 @@ pub const Evaluat = struct {
             // Passed pawn evaluation
             const is_passed_w = isPassedPawn(sq, types.Color.White, black_pawns, white_pawns);
             if (is_passed_w) {
-                white_passed_bb |= types.squar_bb[sq];
+                white_passed_bb |= types.square_bb[sq];
                 var tmp_sc = get_passed_pawn_score(sq);
                 pawn_structure_score[0] += tmp_sc[0];
                 pawn_structure_score[1] += tmp_sc[1];
 
                 // Check if passed pawn is blocked
-                if (rank < 7 and (types.squar_bb[sq + 8] & black_pieces) != 0) {
+                if (rank < 7 and (types.square_bb[sq + 8] & black_pieces) != 0) {
                     tmp_sc = get_blocked_passer_score(rank);
                     pawn_structure_score[0] += tmp_sc[0];
                     pawn_structure_score[1] += tmp_sc[1];
@@ -594,7 +594,7 @@ pub const Evaluat = struct {
             }
 
             // Pawn is supported?
-            const is_supported_w = (white_pawn_attacks & types.squar_bb[sq]) != 0;
+            const is_supported_w = (white_pawn_attacks & types.square_bb[sq]) != 0;
             if (is_supported_w) {
                 const tmp_sc = get_supported_pawn_bonus(rank);
                 pawn_structure_score[0] += tmp_sc[0];
@@ -602,7 +602,7 @@ pub const Evaluat = struct {
             }
 
             // Pawn phalanx (adjacent pawns on same rank)
-            const has_phalanx_w = file < 7 and (white_pawns & types.squar_bb[sq + 1]) != 0;
+            const has_phalanx_w = file < 7 and (white_pawns & types.square_bb[sq + 1]) != 0;
             if (has_phalanx_w) {
                 const tmp_sc = get_phalanx_score(rank);
                 pawn_structure_score[0] += tmp_sc[0];
@@ -674,13 +674,13 @@ pub const Evaluat = struct {
             // Passed pawn evaluation
             const is_passed_b = isPassedPawn(sq, types.Color.Black, white_pawns, black_pawns);
             if (is_passed_b) {
-                black_passed_bb |= types.squar_bb[sq];
+                black_passed_bb |= types.square_bb[sq];
                 var tmp_sc = get_passed_pawn_score(sq ^ 56); // Flip for black
                 pawn_structure_score[0] -= tmp_sc[0];
                 pawn_structure_score[1] -= tmp_sc[1];
 
                 // Check if passed pawn is blocked
-                if (rank > 0 and (types.squar_bb[sq - 8] & white_pieces) != 0) {
+                if (rank > 0 and (types.square_bb[sq - 8] & white_pieces) != 0) {
                     tmp_sc = get_blocked_passer_score(7 - rank);
                     pawn_structure_score[0] -= tmp_sc[0];
                     pawn_structure_score[1] -= tmp_sc[1];
@@ -688,7 +688,7 @@ pub const Evaluat = struct {
             }
 
             // Pawn is supported?
-            const is_supported_b = (black_pawn_attacks & types.squar_bb[sq]) != 0;
+            const is_supported_b = (black_pawn_attacks & types.square_bb[sq]) != 0;
             if (is_supported_b) {
                 const tmp_sc = get_supported_pawn_bonus(7 - rank);
                 pawn_structure_score[0] -= tmp_sc[0];
@@ -696,7 +696,7 @@ pub const Evaluat = struct {
             }
 
             // Pawn phalanx
-            const has_phalanx_b = file < 7 and (black_pawns & types.squar_bb[sq + 1]) != 0;
+            const has_phalanx_b = file < 7 and (black_pawns & types.square_bb[sq + 1]) != 0;
             if (has_phalanx_b) {
                 const tmp_sc = get_phalanx_score(7 - rank);
                 pawn_structure_score[0] -= tmp_sc[0];

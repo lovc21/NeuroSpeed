@@ -3,7 +3,8 @@ const attacks = @import("attacks.zig");
 const types = @import("types.zig");
 const util = @import("util.zig");
 const bitboard = @import("bitboard.zig");
-const move_gen = @import("move_generation.zig");
+const move_gen = @import("move.zig");
+const movegen = @import("movegen.zig");
 const print = std.debug.print;
 const search = @import("search.zig");
 const lists = @import("lists.zig");
@@ -27,7 +28,7 @@ pub const UCI = struct {
         search.init_search();
         search.init_tt(std.heap.page_allocator, 64); // Default 64 MB TT
         var board = types.Board.new();
-        bitboard.fan_pars(types.start_position, &board) catch {
+        bitboard.parse_fen(types.start_position, &board) catch {
             print("Error parsing fen in the new uci function\n", .{});
         };
         return UCI{
@@ -57,9 +58,9 @@ pub const UCI = struct {
         // Generate legal moves to find the matching move
         var move_list: lists.MoveList = .{};
         if (self.board.side == types.Color.White)
-            move_gen.generate_moves(&self.board, &move_list, types.Color.White)
+            movegen.generate_legal_moves(&self.board, &move_list, types.Color.White)
         else
-            move_gen.generate_moves(&self.board, &move_list, types.Color.Black);
+            movegen.generate_legal_moves(&self.board, &move_list, types.Color.Black);
 
         // Find matching move
         for (0..move_list.count) |i| {
@@ -68,15 +69,15 @@ pub const UCI = struct {
                 if (move_string.len >= 5) {
                     const promotion_piece = move_string[4];
                     const expected_flag = switch (promotion_piece) {
-                        'q' => if (move_gen.Print_move_list.is_capture(move)) types.MoveFlags.PC_QUEEN else types.MoveFlags.PR_QUEEN,
-                        'r' => if (move_gen.Print_move_list.is_capture(move)) types.MoveFlags.PC_ROOK else types.MoveFlags.PR_ROOK,
-                        'b' => if (move_gen.Print_move_list.is_capture(move)) types.MoveFlags.PC_BISHOP else types.MoveFlags.PR_BISHOP,
-                        'n' => if (move_gen.Print_move_list.is_capture(move)) types.MoveFlags.PC_KNIGHT else types.MoveFlags.PR_KNIGHT,
+                        'q' => if (move.is_capture()) types.MoveFlags.PC_QUEEN else types.MoveFlags.PR_QUEEN,
+                        'r' => if (move.is_capture()) types.MoveFlags.PC_ROOK else types.MoveFlags.PR_ROOK,
+                        'b' => if (move.is_capture()) types.MoveFlags.PC_BISHOP else types.MoveFlags.PR_BISHOP,
+                        'n' => if (move.is_capture()) types.MoveFlags.PC_KNIGHT else types.MoveFlags.PR_KNIGHT,
                         else => continue,
                     };
                     if (move.flags == expected_flag) return move;
                 } else {
-                    if (!move_gen.Print_move_list.is_promotion(move)) return move;
+                    if (!move.is_promotion()) return move;
                 }
             }
         }
@@ -92,7 +93,7 @@ pub const UCI = struct {
         const position_type = tokens.next() orelse return;
 
         if (std.mem.eql(u8, position_type, "startpos")) {
-            try bitboard.fan_pars(types.start_position, &self.board);
+            try bitboard.parse_fen(types.start_position, &self.board);
         } else if (std.mem.eql(u8, position_type, "fen")) {
             var fen_buffer: [256]u8 = undefined;
             var fen_len: usize = 0;
@@ -111,8 +112,15 @@ pub const UCI = struct {
             }
 
             if (fen_len > 0) {
-                try bitboard.fan_pars(fen_buffer[0..fen_len], &self.board);
+                try bitboard.parse_fen(fen_buffer[0..fen_len], &self.board);
             }
+        }
+
+        // Record starting position hash for repetition detection
+        search.global_search.game_count = 0;
+        if (search.global_search.game_count < 512) {
+            search.global_search.game_hashes[search.global_search.game_count] = self.board.hash;
+            search.global_search.game_count += 1;
         }
 
         const rest = tokens.rest();
@@ -120,10 +128,14 @@ pub const UCI = struct {
             var moves_tokens = std.mem.tokenizeScalar(u8, rest, ' ');
             if (moves_tokens.next()) |first_token| {
                 if (std.mem.eql(u8, first_token, "moves")) {
-                    // Parse and play moves
+                    // Parse and play moves, recording each resulting hash
                     while (moves_tokens.next()) |move_str| {
                         if (self.parse_move(move_str)) |move| {
-                            _ = move_gen.make_move(&self.board, move);
+                            _ = move_gen.make_move_search(&self.board, move);
+                            if (search.global_search.game_count < 512) {
+                                search.global_search.game_hashes[search.global_search.game_count] = self.board.hash;
+                                search.global_search.game_count += 1;
+                            }
                         }
                     }
                 }
@@ -204,36 +216,38 @@ pub const UCI = struct {
 
             if (my_time) |time| {
                 const inc = my_inc orelse 0;
+                const overhead: u64 = 10;
+                const mtg: u64 = if (movestogo) |m| @min(m, 50) else 50;
 
-                if (movestogo) |moves| {
-                    const m = @max(moves, 1);
-                    soft_limit = time / m + inc * 3 / 4;
-                } else {
-                    const total_phase: u64 = @as(u64, eval.global_evaluator.phase[0]) +
-                        @as(u64, eval.global_evaluator.phase[1]);
-                    const estimated_moves: u64 = if (total_phase >= 24)
-                        40 // Opening
-                    else if (total_phase >= 16)
-                        35 // Middlegame
-                    else if (total_phase >= 8)
-                        30 // Late middlegame
-                    else
-                        25; // Endgame
-
-                    soft_limit = time / estimated_moves + inc * 3 / 4;
+                // Adjust remaining time by expected increment value (Lambergar-style)
+                var adj_time = time;
+                if (inc > overhead) {
+                    adj_time = time + mtg * (inc - overhead);
                 }
 
-                // Hard limit: never use more than 50% of remaining time
-                hard_limit = @min(soft_limit * 3, time / 2);
-                // Safety buffer: always leave at least 50ms
-                if (time > 50) {
-                    hard_limit = @min(hard_limit, time - 50);
+                if (movestogo != null) {
+                    // Movestogo mode: scale by remaining moves
+                    soft_limit = @min(7 * adj_time / (10 * mtg), 4 * time / 5);
+                } else {
+                    // Free time control: use time/50 bounded by time/5
+                    soft_limit = @min(adj_time / 50, time / 5);
+                }
+
+                // Hard limit: min(5*soft, 80% of remaining)
+                hard_limit = @min(soft_limit * 5, time * 4 / 5);
+
+                // Safety buffer: always leave at least 10ms
+                if (time > overhead) {
+                    hard_limit = @min(hard_limit, time - overhead);
+                    soft_limit = @min(soft_limit, time - overhead);
                 } else {
                     hard_limit = 1;
+                    soft_limit = 1;
                 }
+
                 // Minimum limits
-                soft_limit = @max(soft_limit, 10);
-                hard_limit = @max(hard_limit, 10);
+                soft_limit = @max(soft_limit, 5);
+                hard_limit = @max(hard_limit, 5);
             }
         }
 
@@ -253,7 +267,7 @@ pub const UCI = struct {
         var timer = std.time.Timer.start() catch unreachable;
 
         for (bench_positions) |fen| {
-            try bitboard.fan_pars(fen, &self.board);
+            try bitboard.parse_fen(fen, &self.board);
 
             search.init_search();
             if (search.global_tt) |*tt| {
@@ -339,8 +353,8 @@ pub const UCI = struct {
                 } else if (std.mem.eql(u8, command, "ucinewgame")) {
                     // Reset board to starting position
                     self.board = types.Board.new();
-                    try bitboard.fan_pars(types.start_position, &self.board);
-                    search.init_search(); // Reset search state
+                    try bitboard.parse_fen(types.start_position, &self.board);
+                    search.init_search(); // Reset search state (also resets game_count to 0)
                     if (search.global_tt) |*tt| {
                         tt.clear();
                     }
@@ -368,11 +382,17 @@ pub const UCI = struct {
                         depth = std.fmt.parseUnsigned(u8, depth_str, 10) catch 1;
                     }
 
-                    util.perft_test_detailed(&self.board, depth);
+                    var timer = std.time.Timer.start() catch unreachable;
+                    const nodes: u64 = if (self.board.side == types.Color.White)
+                        util.perft_legal(types.Color.White, &self.board, depth)
+                    else
+                        util.perft_legal(types.Color.Black, &self.board, depth);
+                    const elapsed_ns = timer.read();
+                    const elapsed_ms = elapsed_ns / std.time.ns_per_ms;
+                    const mnps = if (elapsed_ns > 0) @as(f64, @floatFromInt(nodes)) / @as(f64, @floatFromInt(elapsed_ns)) * 1000.0 else 0.0;
+                    print("{d} nodes, {d}ms, {d:.2} MNodes/s\n", .{ nodes, elapsed_ms, mnps });
                 } else if (std.mem.eql(u8, command, "bench")) {
                     try self.run_bench(stdout);
-                } else if (std.mem.eql(u8, command, "setoption")) {
-                    // TODO: Implement this
                 } else {
                     try stdout.print("Unknown command: {s}\n", .{command});
                 }

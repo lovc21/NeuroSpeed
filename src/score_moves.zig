@@ -5,10 +5,9 @@ const lists = @import("lists.zig");
 const util = @import("util.zig");
 const bitboard = @import("bitboard.zig");
 const eval = @import("evaluation.zig");
-const move_generation = @import("move_generation.zig");
+const move_gen = @import("move.zig");
 const search = @import("search.zig");
 const print = std.debug.print;
-const move_gen = @import("move_generation.zig");
 
 // MVV_LVA table - victim_value[attacker_type]
 pub const MVV_LVA = [6][6]i32{
@@ -43,8 +42,8 @@ const SCORE_COUNTERMOVE = 50000;
 const MAX_LOOP_COUNT = 32;
 const SCORE_PV_MOVE = 10000000;
 
-//TODO this can be optimized by using a ScoredMoveList
-pub inline fn get_next_best_move(move_list: *lists.MoveList, score_list: *lists.ScoreList, i: usize) move_generation.Move {
+//TODO this can be optimized with a scored move list
+pub inline fn get_next_best_move(move_list: *lists.MoveList, score_list: *lists.ScoreList, i: usize) move_gen.Move {
     const count = score_list.count;
     if (i + 1 >= count) return move_list.moves[i];
     
@@ -94,7 +93,7 @@ pub inline fn score_move(board: *types.Board, move_list: *lists.MoveList, score_
         }
 
         // 1. Promotions with capture
-        if (move_generation.Print_move_list.is_promotion(move) and move_generation.Print_move_list.is_capture(move)) {
+        if (move.is_promotion() and move.is_capture()) {
             if (move.flags == types.MoveFlags.PC_QUEEN) {
                 score = SCORE_PROMOTION_QUEEN_CAPTURE;
             } else {
@@ -105,7 +104,7 @@ pub inline fn score_move(board: *types.Board, move_list: *lists.MoveList, score_
             score = SCORE_GOOD_CAPTURE + 105;
         
         // 2. Captures
-        }else if (move_generation.Print_move_list.is_capture(move)) {
+        }else if (move.is_capture()) {
             const victim_type: ?types.PieceType =  types.Board.get_piece_type_at(board, move.to);
             const attacker_type: ?types.PieceType =  types.Board.get_piece_type_at(board, move.from);
                 if (attacker_type == null) {
@@ -134,7 +133,7 @@ pub inline fn score_move(board: *types.Board, move_list: *lists.MoveList, score_
             }
         }
         // 3. Promotions without capture
-        else if (move_generation.Print_move_list.is_promotion(move)) {
+        else if (move.is_promotion()) {
             if (move.flags == types.MoveFlags.PR_QUEEN) {
                 score = SCORE_PROMOTION_QUEEN;
             } else {
@@ -158,9 +157,34 @@ pub inline fn score_move(board: *types.Board, move_list: *lists.MoveList, score_
             // score countermove
             } else if (!countermove.is_empty() and moves_equal(move, countermove)) {
                 score = SCORE_COUNTERMOVE;
-            // score history move
-            } else{
+            // score history + continuation history
+            } else {
                 score = search.global_search.history_moves[move.from][move.to];
+
+                // Add continuation history (counter + follow) for move ordering
+                const cur_pt_opt = board.get_piece_type_at(move.from);
+                if (cur_pt_opt) |cur_pt_enum| {
+                    const cur_pt: u4 = @intCast(@intFromEnum(cur_pt_enum));
+                    const ply = search.global_search.ply;
+                    if (ply >= 1) {
+                        const sm = search.global_search.stack_moves[ply - 1];
+                        if (!sm.is_empty()) {
+                            const pp = search.global_search.stack_pieces[ply - 1];
+                            if (pp < 6) {
+                                score += search.global_search.sc_counter_table[pp][sm.to][cur_pt][move.to];
+                            }
+                        }
+                    }
+                    if (ply >= 2) {
+                        const sm2 = search.global_search.stack_moves[ply - 2];
+                        if (!sm2.is_empty()) {
+                            const gpp = search.global_search.stack_pieces[ply - 2];
+                            if (gpp < 6) {
+                                score += search.global_search.sc_follow_table[gpp][sm2.to][cur_pt][move.to];
+                            }
+                        }
+                    }
+                }
             }
         }
         score_list.append(score);
@@ -168,9 +192,9 @@ pub inline fn score_move(board: *types.Board, move_list: *lists.MoveList, score_
 }
 
 
-pub fn see(board: *const types.Board, move: move_generation.Move, threshold: i32) bool {
+pub fn see(board: *const types.Board, move: move_gen.Move, threshold: i32) bool {
     // Promotions are always considered good
-    if (move_generation.Print_move_list.is_promotion(move)) {
+    if (move.is_promotion()) {
         return true;
     }
 
@@ -202,18 +226,18 @@ pub fn see(board: *const types.Board, move: move_generation.Move, threshold: i32
     }
 
     // Set up the board state after the initial capture
-    var occupied = board.pieces_combined() ^ types.squar_bb[from];
+    var occupied = board.pieces_combined() ^ types.square_bb[from];
     
     if (move.flags == types.MoveFlags.EN_PASSANT) {
         const ep_capture_sq: u6 = if (board.side == types.Color.White) to - 8 else to + 8;
-        occupied ^= types.squar_bb[ep_capture_sq];
+        occupied ^= types.square_bb[ep_capture_sq];
     }
 
     // Get all attackers to the target square
     var attackers = bitboard.get_all_attackers(board, to, occupied);
     
     // Remove the initial attacker from the attackers list
-    attackers &= ~types.squar_bb[from];
+    attackers &= ~types.square_bb[from];
 
     // Get diagonal and orthogonal sliders for x-ray attacks
     const bishops_queens = (board.pieces[@intFromEnum(types.Piece.WHITE_BISHOP)] | 
@@ -235,7 +259,7 @@ pub fn see(board: *const types.Board, move: move_generation.Move, threshold: i32
         
         attackers &= occupied;
         
-        const side_mask = if (side == types.Color.White) board.set_white() else board.set_black();
+        const side_mask = if (side == types.Color.White) board.set_pieces(.White) else board.set_pieces(.Black);
         const my_attackers = attackers & side_mask;
         
         if (my_attackers == 0) {
@@ -290,7 +314,7 @@ pub fn see(board: *const types.Board, move: move_generation.Move, threshold: i32
         }
 
         // Remove the attacker from occupied squares
-        occupied ^= types.squar_bb[attacker_sq];
+        occupied ^= types.square_bb[attacker_sq];
 
         // Add x-ray attacks if necessary
         const piece_type = board.get_piece_type_at(attacker_sq);
