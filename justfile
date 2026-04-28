@@ -15,3 +15,6 @@ start: build
 
 clean:
   rm -rf zig-out .zig-cache
+
+dev:
+  nix develop
