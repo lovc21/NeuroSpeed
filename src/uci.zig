@@ -229,8 +229,10 @@ pub const UCI = struct {
                     // Movestogo mode: scale by remaining moves
                     soft_limit = @min(7 * adj_time / (10 * mtg), 4 * time / 5);
                 } else {
-                    // Free time control: use time/50 bounded by time/5
-                    soft_limit = @min(adj_time / 50, time / 5);
+                    // Free/sudden-death time control: spend ~1/30 of remaining time per move
+                    // (was 1/50, which was too conservative for bullet and left depth on the
+                    // table). Hard limit below still caps absolute spend, so this never flags.
+                    soft_limit = @min(adj_time / 30, time / 5);
                 }
 
                 // Hard limit: min(5*soft, 80% of remaining)
@@ -287,6 +289,77 @@ pub const UCI = struct {
         const nps = @as(u128, total_nodes) * std.time.ns_per_s / elapsed_ns;
 
         try stdout.print("{d} nodes {d} nps\n", .{ total_nodes, nps });
+    }
+
+    // Component speed benchmark for the thesis methodology (tab:perft_positions).
+    // Over the six standard PERFT positions, measures all three component speeds:
+    //   1. move generator  -> perft to `depth`, pure movegen (no zobrist/eval)
+    //   2. evaluation       -> repeated static-eval calls, calls per second
+    //   3. full search      -> search to `depth`, nodes per second of the whole engine
+    fn run_speedbench(self: *UCI, depth: u8, stdout: anytype) !void {
+        const eval_iters: u64 = 20_000_000;
+
+        try stdout.print("\n=== SPEED BENCHMARK (6 standardnih pozicij, globina {d}) ===\n", .{depth});
+        try stdout.print("{s:<14} | {s:>12} | {s:>10} | {s:>12}\n", .{ "Pozicija", "MoveGen MN/s", "Eval M/s", "Search kN/s" });
+        try stdout.print("---------------+--------------+------------+-------------\n", .{});
+
+        var sum_movegen: f64 = 0;
+        var sum_eval: f64 = 0;
+        var total_search_nodes: u64 = 0;
+        var total_search_ns: u128 = 0;
+
+        for (types.standard_perft_positions, types.standard_perft_names) |fen, name| {
+            // --- 1. Move generator (perft, fast play/undo, no eval/zobrist) ---
+            try bitboard.parse_fen(fen, &self.board);
+            const white = self.board.side == types.Color.White;
+            var t1 = std.time.Timer.start() catch unreachable;
+            const perft_nodes: u64 = if (white)
+                util.perft_legal(types.Color.White, &self.board, depth)
+            else
+                util.perft_legal(types.Color.Black, &self.board, depth);
+            const t1_ns = @max(1, t1.read());
+            const movegen_mnps = @as(f64, @floatFromInt(perft_nodes)) / @as(f64, @floatFromInt(t1_ns)) * 1000.0;
+
+            // --- 2. Evaluation function (repeated static-eval calls) ---
+            var sink: i64 = 0;
+            var t2 = std.time.Timer.start() catch unreachable;
+            var i: u64 = 0;
+            while (i < eval_iters) : (i += 1) {
+                const s = if (white)
+                    eval.global_evaluator.eval_full(&self.board, types.Color.White)
+                else
+                    eval.global_evaluator.eval_full(&self.board, types.Color.Black);
+                sink +%= s;
+            }
+            const t2_ns = @max(1, t2.read());
+            std.mem.doNotOptimizeAway(sink);
+            const eval_meps = @as(f64, @floatFromInt(eval_iters)) / @as(f64, @floatFromInt(t2_ns)) * 1000.0;
+
+            // --- 3. Full search (whole engine) ---
+            try bitboard.parse_fen(fen, &self.board); // restore clean state for search
+            search.init_search();
+            if (search.global_tt) |*tt| tt.clear();
+            var t3 = std.time.Timer.start() catch unreachable;
+            if (white)
+                search.search_position(&self.board, depth, 0, 0, types.Color.White)
+            else
+                search.search_position(&self.board, depth, 0, 0, types.Color.Black);
+            const t3_ns = @max(1, t3.read());
+            const search_nodes = search.global_search.nodes;
+            const search_nps = @as(f64, @floatFromInt(search_nodes)) * std.time.ns_per_s / @as(f64, @floatFromInt(t3_ns));
+
+            try stdout.print("{s:<14} | {d:>12.2} | {d:>10.2} | {d:>12.0}\n", .{ name, movegen_mnps, eval_meps, search_nps / 1000.0 });
+
+            sum_movegen += movegen_mnps;
+            sum_eval += eval_meps;
+            total_search_nodes += search_nodes;
+            total_search_ns += t3_ns;
+        }
+
+        const agg_search_nps = @as(f64, @floatFromInt(total_search_nodes)) * std.time.ns_per_s / @as(f64, @floatFromInt(total_search_ns));
+        try stdout.print("---------------+--------------+------------+-------------\n", .{});
+        try stdout.print("{s:<14} | {d:>12.2} | {d:>10.2} | {d:>12.0}\n", .{ "Povprecje", sum_movegen / 6.0, sum_eval / 6.0, agg_search_nps / 1000.0 });
+        try stdout.print("MN/s=mio vozlisc/s (movegen), M/s=mio klicev/s (eval), kN/s=tisoc vozlisc/s (search)\n", .{});
     }
 
     fn parse_setoption(self: *UCI, command: []const u8) void {
@@ -390,9 +463,42 @@ pub const UCI = struct {
                     const elapsed_ns = timer.read();
                     const elapsed_ms = elapsed_ns / std.time.ns_per_ms;
                     const mnps = if (elapsed_ns > 0) @as(f64, @floatFromInt(nodes)) / @as(f64, @floatFromInt(elapsed_ns)) * 1000.0 else 0.0;
-                    print("{d} nodes, {d}ms, {d:.2} MNodes/s\n", .{ nodes, elapsed_ms, mnps });
+                    try stdout.print("{d} nodes, {d}ms, {d:.2} MNodes/s\n", .{ nodes, elapsed_ms, mnps });
+                } else if (std.mem.eql(u8, command, "evalspeed")) {
+                    // Izmeri hitrost evalvacijske funkcije: N-krat poklicemo eval na
+                    // trenutni poziciji in izpisemo "evalspeed evals <N> time <ms>".
+                    var iters: u64 = 1000000;
+                    if (tokens.next()) |iters_str| {
+                        iters = std.fmt.parseUnsigned(u64, iters_str, 10) catch 1000000;
+                    }
+                    const white = self.board.side == types.Color.White;
+                    var sink: i64 = 0;
+                    var timer = std.time.Timer.start() catch unreachable;
+                    var i: u64 = 0;
+                    while (i < iters) : (i += 1) {
+                        const s = if (white)
+                            eval.global_evaluator.eval_full(&self.board, types.Color.White)
+                        else
+                            eval.global_evaluator.eval_full(&self.board, types.Color.Black);
+                        sink +%= s;
+                    }
+                    const elapsed_ms = @as(f64, @floatFromInt(timer.read())) / 1_000_000.0;
+                    try stdout.print("evalspeed evals {d} time {d:.3}\n", .{ iters, elapsed_ms });
+                    if (sink == std.math.minInt(i64)) {
+                        print("{d}\n", .{sink});
+                    }
+                } else if (std.mem.eql(u8, command, "eval")) {
+                    // Print static evaluation of the current position (White's perspective).
+                    const score_white = eval.global_evaluator.eval_full(&self.board, types.Color.White);
+                    try stdout.print("eval cp {d} (white perspective)\n", .{score_white});
                 } else if (std.mem.eql(u8, command, "bench")) {
                     try self.run_bench(stdout);
+                } else if (std.mem.eql(u8, command, "speedbench")) {
+                    var depth: u8 = 6;
+                    if (tokens.next()) |depth_str| {
+                        depth = std.fmt.parseUnsigned(u8, depth_str, 10) catch 6;
+                    }
+                    try self.run_speedbench(depth, stdout);
                 } else {
                     try stdout.print("Unknown command: {s}\n", .{command});
                 }

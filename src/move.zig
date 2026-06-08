@@ -303,10 +303,15 @@ pub inline fn make_move_search(board: *types.Board, move: Move) SearchUndo {
         board.hash ^= zobrist.piece_keys[zobrist.piece_index(undo.captured)][to];
         eval.global_evaluator.remove_piece_phase(undo.captured);
         eval.global_evaluator.remove_piece_material(undo.captured);
+        eval.global_evaluator.remove_piece_psqt(undo.captured, to);
     }
 
     // Move piece in bitboards (XOR trick: clear source + set target in one op)
     board.pieces[piece_idx] ^= types.square_bb[from] | types.square_bb[to];
+
+    // Incremental PSQT: move piece from source to target square
+    eval.global_evaluator.remove_piece_psqt(piece, from);
+    eval.global_evaluator.add_piece_psqt(piece, to);
 
     // Update mailbox
     board.board[to] = piece;
@@ -322,6 +327,7 @@ pub inline fn make_move_search(board: *types.Board, move: Move) SearchUndo {
         board.hash ^= zobrist.piece_keys[zobrist.piece_index(captured_pawn)][captured_sq];
         eval.global_evaluator.remove_piece_phase(captured_pawn);
         eval.global_evaluator.remove_piece_material(captured_pawn);
+        eval.global_evaluator.remove_piece_psqt(captured_pawn, captured_sq);
     }
 
     // Handle promotions
@@ -340,6 +346,9 @@ pub inline fn make_move_search(board: *types.Board, move: Move) SearchUndo {
         eval.global_evaluator.remove_piece_material(piece);
         eval.global_evaluator.put_piece_phase(promoted);
         eval.global_evaluator.add_piece_material(promoted);
+        // Incremental PSQT: the move step added the pawn at `to`; replace it with the promoted piece.
+        eval.global_evaluator.remove_piece_psqt(piece, to);
+        eval.global_evaluator.add_piece_psqt(promoted, to);
     }
 
     // Reset en passant
@@ -362,6 +371,8 @@ pub inline fn make_move_search(board: *types.Board, move: Move) SearchUndo {
                 board.board[@intFromEnum(types.square.h1)] = types.Piece.NO_PIECE;
                 board.hash ^= zobrist.piece_keys[rook_pi][@intFromEnum(types.square.h1)];
                 board.hash ^= zobrist.piece_keys[rook_pi][@intFromEnum(types.square.f1)];
+                eval.global_evaluator.remove_piece_psqt(rook_piece, @intCast(@intFromEnum(types.square.h1)));
+                eval.global_evaluator.add_piece_psqt(rook_piece, @intCast(@intFromEnum(types.square.f1)));
             },
             @intFromEnum(types.square.c1) => {
                 board.pieces[rook_idx] ^= types.square_bb[@intFromEnum(types.square.a1)] | types.square_bb[@intFromEnum(types.square.d1)];
@@ -369,6 +380,8 @@ pub inline fn make_move_search(board: *types.Board, move: Move) SearchUndo {
                 board.board[@intFromEnum(types.square.a1)] = types.Piece.NO_PIECE;
                 board.hash ^= zobrist.piece_keys[rook_pi][@intFromEnum(types.square.a1)];
                 board.hash ^= zobrist.piece_keys[rook_pi][@intFromEnum(types.square.d1)];
+                eval.global_evaluator.remove_piece_psqt(rook_piece, @intCast(@intFromEnum(types.square.a1)));
+                eval.global_evaluator.add_piece_psqt(rook_piece, @intCast(@intFromEnum(types.square.d1)));
             },
             @intFromEnum(types.square.g8) => {
                 board.pieces[rook_idx] ^= types.square_bb[@intFromEnum(types.square.h8)] | types.square_bb[@intFromEnum(types.square.f8)];
@@ -376,6 +389,8 @@ pub inline fn make_move_search(board: *types.Board, move: Move) SearchUndo {
                 board.board[@intFromEnum(types.square.h8)] = types.Piece.NO_PIECE;
                 board.hash ^= zobrist.piece_keys[rook_pi][@intFromEnum(types.square.h8)];
                 board.hash ^= zobrist.piece_keys[rook_pi][@intFromEnum(types.square.f8)];
+                eval.global_evaluator.remove_piece_psqt(rook_piece, @intCast(@intFromEnum(types.square.h8)));
+                eval.global_evaluator.add_piece_psqt(rook_piece, @intCast(@intFromEnum(types.square.f8)));
             },
             @intFromEnum(types.square.c8) => {
                 board.pieces[rook_idx] ^= types.square_bb[@intFromEnum(types.square.a8)] | types.square_bb[@intFromEnum(types.square.d8)];
@@ -383,6 +398,8 @@ pub inline fn make_move_search(board: *types.Board, move: Move) SearchUndo {
                 board.board[@intFromEnum(types.square.a8)] = types.Piece.NO_PIECE;
                 board.hash ^= zobrist.piece_keys[rook_pi][@intFromEnum(types.square.a8)];
                 board.hash ^= zobrist.piece_keys[rook_pi][@intFromEnum(types.square.d8)];
+                eval.global_evaluator.remove_piece_psqt(rook_piece, @intCast(@intFromEnum(types.square.a8)));
+                eval.global_evaluator.add_piece_psqt(rook_piece, @intCast(@intFromEnum(types.square.d8)));
             },
             else => {},
         }

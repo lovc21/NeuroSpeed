@@ -235,7 +235,7 @@ pub const Search = struct {
         }
 
         if (depth < -MAX_QUIESCENCE_DEPTH) {
-            return eval.global_evaluator.eval(board.*, color);
+            return eval.global_evaluator.eval(board, color, mut_alpha, beta);
         }
 
         self.nodes += 1;
@@ -244,7 +244,7 @@ pub const Search = struct {
         if (self.stop) return 0;
 
         if (self.ply >= MAX_PLY - 1) {
-            return eval.global_evaluator.eval(board.*, color);
+            return eval.global_evaluator.eval(board, color, mut_alpha, beta);
         }
 
         var alpha = mut_alpha;
@@ -266,7 +266,7 @@ pub const Search = struct {
             best_score = -MATE_VALUE + @as(i32, @intCast(self.ply));
         } else {
             // Standing pat - current position evaluation as lower bound
-            best_score = eval.global_evaluator.eval(board.*, color);
+            best_score = eval.global_evaluator.eval(board, color, alpha, adj_beta);
 
             // Standing pat cutoff
             if (best_score >= adj_beta) {
@@ -305,21 +305,23 @@ pub const Search = struct {
         for (0..move_list.count) |i| {
             const move = move_scores.get_next_best_move(&move_list, &score_list, i);
 
-            if (!in_check and move.is_capture() and
-                move.flags != types.MoveFlags.EN_PASSANT)
-            {
-                const attacker_type = board.get_piece_type_at(move.from);
-                const victim_type = board.get_piece_type_at(move.to);
-
-                if (attacker_type != null and victim_type != null) {
-                    const attacker_value = piece_values[@intFromEnum(attacker_type.?)];
-                    const victim_value = piece_values[@intFromEnum(victim_type.?)];
-
-                    // Skip if we're losing material in the most basic sense
-                    // (This is very basic SEE - a proper implementation would be more complex)
-                    if (victim_value < attacker_value - 200) {
-                        continue;
+            // Capture pruning (only when not in check, and not for promotions which are
+            // rare and important enough to always search).
+            if (!in_check and move.is_capture() and !move.is_promotion()) {
+                // Delta pruning: if the optimistic gain (victim value + margin) on top of
+                // the current best score still can't reach alpha, this capture is hopeless.
+                if (move.flags != types.MoveFlags.EN_PASSANT) {
+                    const victim_type = board.get_piece_type_at(move.to);
+                    if (victim_type) |vt| {
+                        const victim_value = piece_values[@intFromEnum(vt)];
+                        if (best_score + victim_value + 150 < alpha) {
+                            continue;
+                        }
                     }
+                }
+                // SEE pruning: skip captures that lose material (static exchange < 0).
+                if (!move_scores.see(board, move, 0)) {
+                    continue;
                 }
             }
 
@@ -484,7 +486,7 @@ pub const Search = struct {
         var static_eval: i32 = 0;
         var improving: u1 = 0;
         if (!in_check) {
-            static_eval = eval.global_evaluator.eval(board.*, color);
+            static_eval = eval.global_evaluator.eval(board, color, alpha, adj_beta);
             if (self.ply < MAX_PLY) self.eval_stack[self.ply] = static_eval;
 
             // Improving: are we doing better than 2 or 4 plies ago (same side to move)?

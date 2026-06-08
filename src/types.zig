@@ -63,6 +63,23 @@ pub const tricky_position: []const u8 = "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1
 pub const killer_position: []const u8 = "rnbqkb1r/pp1p1pPp/8/2p1pP2/1P1P4/3P3P/P1P1P3/RNBQKBNR w KQkq e6 0 1";
 pub const cmk_position: []const u8 = "r2q1rk1/ppp2ppp/2n1bn2/2b1p3/3pP3/3P1NPP/PPP1NPB1/R1BQ1RK1 b - - 0 9 ";
 
+// Six standard Chess Programming Wiki PERFT positions used for component speed
+// benchmarks (move generator, evaluation, search). Matches table tab:perft_positions
+// in the thesis. Order: start, Kiwipete, rook endgame, mirrored middlegame,
+// promotion, quiet tournament position.
+pub const standard_perft_positions = [6][]const u8{
+    "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+    "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+    "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1",
+    "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1",
+    "rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8",
+    "r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 10",
+};
+pub const standard_perft_names = [6][]const u8{
+    "Zacetna",     "Kiwipete",    "Topovska konc.",
+    "Zrcalna sr.", "Promocijska", "Tihi turnir",
+};
+
 pub const PieceString = "PNBRQK~>pnbrqk.";
 
 pub const Color = enum {
