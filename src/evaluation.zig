@@ -401,9 +401,7 @@ pub const Evaluator = struct {
 
     pub fn eval(self: Evaluator, board: *const types.Board, comptime color: types.Color, alpha: i32, beta: i32) i32 {
         if (nnue.use_nnue) {
-            // use NNUE to evaluate the board here
-            const score = 0;
-            return score;
+            return nnue.evaluate(board);
         } else {
             return self.hce_eval(board, color, alpha, beta);
         }
