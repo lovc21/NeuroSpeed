@@ -197,6 +197,8 @@ pub fn parse_fen(fen: []const u8, board: *types.Board) !void {
         eval.global_evaluator.put_piece_phase(pe);
         // Add material for this piece
         eval.global_evaluator.add_piece_material(pe);
+        // Add piece-square table value for this piece (incremental PSQT)
+        eval.global_evaluator.add_piece_psqt(pe, @intCast(sq_idx));
 
         file += 1;
     }

@@ -178,6 +178,36 @@ const end_game_tables: [6][64]i16 = .{
     end_game_king_table,
 };
 
+// Sum piece-square table values over every piece, from White's perspective
+// (positive = good for White). PeSTO tables are written a8-first (index 0 = a8),
+// so a White piece on square `sq` reads table[type][sq ^ 56] and a Black piece
+// reads table[type][sq]. Returns [mid_game, end_game]. Pure positional — material
+// is added separately, so there is no double counting.
+fn psqt_score(board: *const types.Board) [2]i32 {
+    var mg: i32 = 0;
+    var eg: i32 = 0;
+    inline for (0..6) |pt| {
+        // White pieces (piece enum 0..5)
+        var wbb = board.pieces[pt];
+        while (wbb != 0) {
+            const sq: u6 = @intCast(util.lsb_index(wbb));
+            wbb &= wbb - 1;
+            const idx: u6 = sq ^ 56;
+            mg += mid_game_tables[pt][idx];
+            eg += end_game_tables[pt][idx];
+        }
+        // Black pieces (piece enum 8..13)
+        var bbb = board.pieces[pt + 8];
+        while (bbb != 0) {
+            const sq: u6 = @intCast(util.lsb_index(bbb));
+            bbb &= bbb - 1;
+            mg -= mid_game_tables[pt][sq];
+            eg -= end_game_tables[pt][sq];
+        }
+    }
+    return .{ mg, eg };
+}
+
 pub const Evaluator = struct {
     mid_game_eval: i32,
     end_game_eval: i32,
@@ -209,6 +239,32 @@ pub const Evaluator = struct {
 
         self.material_mg -= mid_game_material_score[piece_type_idx] * color_multiplier;
         self.material_eg -= end_game_material_score[piece_type_idx] * color_multiplier;
+    }
+
+    // Incremental piece-square table update. White perspective (+ for white pieces).
+    // PeSTO tables are a8-first, so white reads table[type][sq ^ 56], black reads table[type][sq].
+    pub inline fn add_piece_psqt(self: *Evaluator, piece: types.Piece, sq: u6) void {
+        const pt = get_piece_type_index(piece);
+        if (get_piece_color_index(piece) == 0) {
+            const idx: u6 = sq ^ 56;
+            self.mid_game_eval += mid_game_tables[pt][idx];
+            self.end_game_eval += end_game_tables[pt][idx];
+        } else {
+            self.mid_game_eval -= mid_game_tables[pt][sq];
+            self.end_game_eval -= end_game_tables[pt][sq];
+        }
+    }
+
+    pub inline fn remove_piece_psqt(self: *Evaluator, piece: types.Piece, sq: u6) void {
+        const pt = get_piece_type_index(piece);
+        if (get_piece_color_index(piece) == 0) {
+            const idx: u6 = sq ^ 56;
+            self.mid_game_eval -= mid_game_tables[pt][idx];
+            self.end_game_eval -= end_game_tables[pt][idx];
+        } else {
+            self.mid_game_eval += mid_game_tables[pt][sq];
+            self.end_game_eval += end_game_tables[pt][sq];
+        }
     }
 
     // Initialize material from board position
@@ -302,37 +358,60 @@ pub const Evaluator = struct {
         }
     }
 
-    pub fn hce_eval(self: Evaluator, board: types.Board, comptime color: types.Color) i32 {
-        if (Evaluator.is_draw(board)) {
+    // Positional terms (mobility, king safety, pawn structure, threats) are bounded;
+    // if the cheap material+PST score is this far outside the [alpha, beta] window we
+    // skip the expensive evaluate_peace() call. Standard "lazy evaluation".
+    pub const LAZY_MARGIN: i32 = 600;
+
+    pub fn hce_eval(self: Evaluator, board: *const types.Board, comptime color: types.Color, alpha: i32, beta: i32) i32 {
+        if (Evaluator.is_draw(board.*)) {
             return 0;
         }
 
         const phase: i32 = @intCast(@min(self.phase[types.Color.White.toU4()] + self.phase[types.Color.Black.toU4()], 64));
-
-        var mid_game_eval = self.mid_game_eval + self.material_mg;
-        var end_game_eval = self.end_game_eval + self.material_eg;
-
-        const pieces_score: [2]i32 = evaluate_peace(&board);
-
-        mid_game_eval += pieces_score[0];
-        end_game_eval += pieces_score[1];
-
-        var score: i32 = @divTrunc((mid_game_eval * phase + end_game_eval * (64 - phase)), 64);
         const tempo_bonus: i32 = @divTrunc(mid_game_tempo_bonus * phase + end_game_tempo_bonus * (64 - phase), 64);
 
-        score += evaluate_special_endgames(self, &board);
+        // Cheap base: incremental piece-square tables + incremental material.
+        // mid_game_eval/end_game_eval are maintained incrementally in make_move_search.
+        if (std.debug.runtime_safety) {
+            // Verify the incremental PSQT matches a fresh recompute (Debug/ReleaseSafe only).
+            const check = psqt_score(board);
+            std.debug.assert(check[0] == self.mid_game_eval and check[1] == self.end_game_eval);
+        }
+        const base_mg = self.material_mg + self.mid_game_eval;
+        const base_eg = self.material_eg + self.end_game_eval;
+        const base_score: i32 = @divTrunc(base_mg * phase + base_eg * (64 - phase), 64);
+
+        // Lazy cutoff in the side-to-move perspective (matches the caller's alpha/beta).
+        const lazy_stm: i32 = if (color == types.Color.White) base_score + tempo_bonus else -(base_score + tempo_bonus);
+        if (lazy_stm - LAZY_MARGIN >= beta or lazy_stm + LAZY_MARGIN <= alpha) {
+            return lazy_stm;
+        }
+
+        // Full positional evaluation.
+        const pieces_score: [2]i32 = evaluate_peace(board);
+        const mid_game_eval = base_mg + pieces_score[0];
+        const end_game_eval = base_eg + pieces_score[1];
+
+        var score: i32 = @divTrunc((mid_game_eval * phase + end_game_eval * (64 - phase)), 64);
+        score += evaluate_special_endgames(self, board);
 
         return if (color == types.Color.White) score + tempo_bonus else -(score + tempo_bonus);
     }
 
-    pub fn eval(self: Evaluator, board: types.Board, comptime color: types.Color) i32 {
+    pub fn eval(self: Evaluator, board: *const types.Board, comptime color: types.Color, alpha: i32, beta: i32) i32 {
         if (nnue.use_nnue) {
             // use NNUE to evaluate the board here
             const score = 0;
             return score;
         } else {
-            return self.hce_eval(board, color);
+            return self.hce_eval(board, color, alpha, beta);
         }
+    }
+
+    // Full evaluation with no lazy cutoff — for UCI display, benchmarks and tests.
+    pub fn eval_full(self: Evaluator, board: *const types.Board, comptime color: types.Color) i32 {
+        return self.eval(board, color, -1_000_000, 1_000_000);
     }
 
     inline fn evaluate_special_endgames(self: Evaluator, board: *const types.Board) i32 {
@@ -1547,17 +1626,21 @@ const eg_bishop_mobility: [14]i32 = .{ -46, -25, -14, -4, 5, 14, 20, 23, 27, 26,
 const mg_rook_mobility: [15]i32 = .{ -33, -27, -22, -18, -18, -13, -11, -8, -5, -3, -1, 0, 5, 10, 21 };
 const eg_rook_mobility: [15]i32 = .{ -25, -20, -20, -16, -8, -4, 1, 5, 11, 17, 22, 27, 26, 25, 16 };
 
+// NOTE: the original tail of these tables was corrupt/non-monotonic (mg reached
+// +1448 cp, eg fell to -683 cp), which inflated the score by many pawns whenever
+// the queen had high mobility and caused phantom winning evaluations. Rescaled to
+// a sane, monotonic ramp consistent with the rook/bishop mobility magnitudes.
 const mg_queen_mobility: [28]i32 = .{
-    -16, -14, -11, -10,  -7, -5, -4, -3,
-    0,   0,   1,   2,    3,  4,  6,  7,
-    11,  15,  20,  30,   44, 89, 77, 170,
-    132, 304, 594, 1448,
+    -16, -14, -11, -10, -7, -5, -4, -3,
+    0,   0,   1,   2,   3,  4,  6,  7,
+    9,   12,  15,  18,  22, 26, 30, 35,
+    40,  45,  50,  55,
 };
 const eg_queen_mobility: [28]i32 = .{
-    -106, -46,  -36,  -26,  -24, -17, -10, -2,
-    1,    7,    12,   17,   20,  23,  27,  32,
-    29,   27,   27,   20,   9,   -18, -14, -59,
-    -46,  -133, -273, -683,
+    -106, -46, -36, -26, -24, -17, -10, -2,
+    1,    7,   12,  17,  20,  23,  27,  32,
+    34,   38,  42,  46,  50,  54,  58,  62,
+    66,   70,  74,  78,
 };
 
 const mg_pawn_attacking: [6]i32 = .{ 0, 36, 41, 25, 23, 0 };

@@ -89,11 +89,11 @@ pub inline fn score_move(board: *types.Board, move_list: *lists.MoveList, score_
         var score: i32 = 0;
        
         if (!pv_move.is_empty() and moves_equal(move, pv_move)) {
+            // TT/PV move must stay ordered first — do NOT let the capture/promotion
+            // classification below overwrite its score.
             score = SCORE_PV_MOVE;
-        }
-
-        // 1. Promotions with capture
-        if (move.is_promotion() and move.is_capture()) {
+            // 1. Promotions with capture
+        } else if (move.is_promotion() and move.is_capture()) {
             if (move.flags == types.MoveFlags.PC_QUEEN) {
                 score = SCORE_PROMOTION_QUEEN_CAPTURE;
             } else {

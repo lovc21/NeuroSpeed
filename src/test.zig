@@ -484,7 +484,6 @@ test "Perft Test the move generation tricky position" {
     print("Perft test for the tricky position done\n", .{});
 }
 
-
 test "test phase calculation" {
     attacks.init_attacks();
 
@@ -672,6 +671,56 @@ test "Legal perft promo d5" {
     try run_perft_legal_bench(types.killer_position, "legal promo d5", 5, 36112837);
 }
 
+// --- Component speed benchmark over the six standard PERFT positions ---
+// Mirrors the UCI `speedbench` command; lets `zig build test` reproduce the
+// move generator / evaluation / search speeds for table tab:perft_positions.
+const search = @import("search.zig");
+
+fn bench_eval_one(fen: []const u8, name: []const u8, iters: u64) !void {
+    var board = types.Board.new();
+    try bitboard.parse_fen(fen, &board); // also sets up global_evaluator (material+phase)
+    var sink: i64 = 0;
+    var timer = std.time.Timer.start() catch unreachable;
+    var i: u64 = 0;
+    while (i < iters) : (i += 1) {
+        const s = if (board.side == types.Color.White)
+            eval.global_evaluator.eval_full(&board, types.Color.White)
+        else
+            eval.global_evaluator.eval_full(&board, types.Color.Black);
+        sink +%= s; // keep the optimizer from deleting the eval call
+    }
+    const ns = @max(1, timer.read());
+    std.mem.doNotOptimizeAway(sink);
+    const meps = @as(f64, @floatFromInt(iters)) / @as(f64, @floatFromInt(ns)) * 1000.0;
+    print("{s:<14}: {d:>10.2} M eval/s\n", .{ name, meps });
+}
+
+test "Eval speed benchmark" {
+    attacks.init_attacks();
+    search.init_search();
+    print("\n=== EVAL SPEED BENCHMARK (M klicev/s) ===\n", .{});
+    for (types.standard_perft_positions, types.standard_perft_names) |fen, name| {
+        try bench_eval_one(fen, name, 20_000_000);
+    }
+}
+
+test "MoveGen speed benchmark" {
+    attacks.init_attacks();
+    print("\n=== MOVEGEN SPEED BENCHMARK (perft d6, MNodes/s) ===\n", .{});
+    for (types.standard_perft_positions, types.standard_perft_names) |fen, name| {
+        var board = types.Board.new();
+        try bitboard.parse_fen(fen, &board);
+        var timer = std.time.Timer.start() catch unreachable;
+        const nodes: u64 = if (board.side == types.Color.White)
+            util.perft_legal(types.Color.White, &board, 6)
+        else
+            util.perft_legal(types.Color.Black, &board, 6);
+        const ns = @max(1, timer.read());
+        const mnps = @as(f64, @floatFromInt(nodes)) / @as(f64, @floatFromInt(ns)) * 1000.0;
+        print("{s:<14}: {d:>12} nodes, {d:>8.2} MNodes/s\n", .{ name, nodes, mnps });
+    }
+}
+
 test "test evaluation end games" {
     attacks.init_attacks();
 
@@ -698,7 +747,7 @@ test "test evaluation end games" {
         var board = types.Board.new();
         try bitboard.parse_fen(test_case.fen, &board);
 
-        const evaluation = eval.global_evaluator.eval(board, types.Color.White);
+        const evaluation = eval.global_evaluator.eval_full(&board, types.Color.White);
         const min_expected = test_case.expected_range[0];
         const max_expected = test_case.expected_range[1];
 
