@@ -11,6 +11,8 @@ const move_scores = @import("score_moves.zig");
 const uci = @import("uci.zig");
 const eval = @import("evaluation.zig");
 const search = @import("search.zig");
+const datagen = @import("datagen.zig");
+const nnue = @import("nnue.zig");
 const debug = false;
 
 fn print_moves_and_scores(move_list: *const lists.MoveList, score_list: *const lists.ScoreList) void {
@@ -82,11 +84,26 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
+    const argv = try std.process.argsAlloc(allocator);
+    defer std.process.argsFree(allocator, argv);
+
+    // Subcommand: `NeuroSpeed datagen [options]` → self-play training-data generation.
+    if (argv.len >= 2 and std.ascii.eqlIgnoreCase(argv[1], "datagen")) {
+        const cfg = datagen.parse_args(argv[2..]) catch |err| {
+            if (err == error.HelpRequested) return;
+            return err;
+        };
+        try datagen.run(allocator, cfg);
+        return;
+    }
+
+    // Datagen (above) stays on the HCE; everything else uses the embedded NNUE.
+    try nnue.load_embedded();
+    nnue.use_nnue = true;
+
     var do_bench = false;
     var bench_depth: u8 = 5;
-    var args = std.process.args();
-    _ = args.next();
-    while (args.next()) |arg| {
+    for (argv[1..]) |arg| {
         if (std.ascii.eqlIgnoreCase(arg, "bench")) {
             do_bench = true;
         }

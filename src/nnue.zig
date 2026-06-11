@@ -8,8 +8,12 @@ const Color = types.Color;
 pub var use_nnue = false;
 
 // --- Architecture (must equal the bullet HIDDEN_SIZE of the trained net) ---
-pub const HIDDEN: usize = 256;
+pub const HIDDEN: usize = 1024;
 const INPUT: usize = 768;
+
+// Output buckets, selected by material count exactly as bullet's
+// `MaterialCount<8>`: bucket = (piece_count - 2) / ceil(32/8).
+const OUTPUT_BUCKETS: usize = 8;
 
 // --- Quantisation constants (must equal the bullet training config) ---
 const QA: i32 = 255;
@@ -25,8 +29,10 @@ const SCALE64: i64 = SCALE;
 // active. So the on-disk order == `feature_weights[feature][hidden]`.
 var feature_weights: [INPUT][HIDDEN]i16 = undefined;
 var feature_bias: [HIDDEN]i16 = undefined;
-var output_weights: [2 * HIDDEN]i16 = undefined; // [0..HIDDEN]=stm, [HIDDEN..]=ntm
-var output_bias: i16 = 0;
+// One output row per bucket. Within a bucket: [0..HIDDEN]=stm, [HIDDEN..]=ntm.
+// bullet saves these `.transpose()`d, i.e. bucket-major / each bucket contiguous.
+var output_weights: [OUTPUT_BUCKETS][2 * HIDDEN]i16 = undefined;
+var output_bias: [OUTPUT_BUCKETS]i16 = undefined;
 var net_loaded: bool = false;
 
 /// Size in bytes of the parameter region of a `quantised.bin` for this
@@ -34,8 +40,8 @@ var net_loaded: bool = false;
 pub const NET_BYTES: usize =
     INPUT * HIDDEN * @sizeOf(i16) // feature_weights (l0w)
 + HIDDEN * @sizeOf(i16) // feature_bias   (l0b)
-+ 2 * HIDDEN * @sizeOf(i16) // output_weights (l1w)
-+ @sizeOf(i16); // output_bias    (l1b)
++ OUTPUT_BUCKETS * 2 * HIDDEN * @sizeOf(i16) // output_weights (l1w, bucket-major)
++ OUTPUT_BUCKETS * @sizeOf(i16); // output_bias    (l1b, one per bucket)
 
 pub fn loaded() bool {
     return net_loaded;
@@ -91,19 +97,30 @@ inline fn screlu(x: i16) i32 {
     return y * y;
 }
 
-/// Forward pass from a built accumulator. Returns a side-to-move-relative
-/// score in centipawns (positive = good for `stm`). Bit-identical to bullet's
-/// reference inference; the i64 accumulation only guards against overflow.
-pub fn evaluate_acc(acc: *const Accumulator, stm: Color) i32 {
+/// bullet `MaterialCount<OUTPUT_BUCKETS>`: divisor = ceil(32 / OUTPUT_BUCKETS),
+/// bucket = (piece_count - 2) / divisor. Two kings are always present so the
+/// count is >= 2 and the bucket index stays in [0, OUTPUT_BUCKETS).
+inline fn output_bucket(board: *const Board) usize {
+    const divisor: usize = (32 + OUTPUT_BUCKETS - 1) / OUTPUT_BUCKETS;
+    const count: usize = @popCount(board.pieces_combined());
+    return (count - 2) / divisor;
+}
+
+/// Forward pass from a built accumulator, using output bucket `bucket`. Returns
+/// a side-to-move-relative score in centipawns (positive = good for `stm`).
+/// Bit-identical to bullet's reference inference; the i64 accumulation only
+/// guards against overflow.
+pub fn evaluate_acc(acc: *const Accumulator, stm: Color, bucket: usize) i32 {
     const us: usize = @intFromEnum(stm);
     const them: usize = us ^ 1;
+    const w = &output_weights[bucket];
 
     var sum: i64 = 0;
-    for (0..HIDDEN) |i| sum += @as(i64, screlu(acc.vals[us][i])) * @as(i64, output_weights[i]);
-    for (0..HIDDEN) |i| sum += @as(i64, screlu(acc.vals[them][i])) * @as(i64, output_weights[HIDDEN + i]);
+    for (0..HIDDEN) |i| sum += @as(i64, screlu(acc.vals[us][i])) * @as(i64, w[i]);
+    for (0..HIDDEN) |i| sum += @as(i64, screlu(acc.vals[them][i])) * @as(i64, w[HIDDEN + i]);
 
     sum = @divTrunc(sum, QA64); // QA*QA*QB -> QA*QB
-    sum += @as(i64, output_bias);
+    sum += @as(i64, output_bias[bucket]);
     sum *= SCALE64;
     sum = @divTrunc(sum, QA64 * QB64); // -> centipawns
     return @intCast(sum);
@@ -113,7 +130,7 @@ pub fn evaluate_acc(acc: *const Accumulator, stm: Color) i32 {
 pub fn evaluate(board: *const Board) i32 {
     var acc: Accumulator = undefined;
     acc.refresh(board);
-    return evaluate_acc(&acc, board.side);
+    return evaluate_acc(&acc, board.side, output_bucket(board));
 }
 
 // ===========================================================================
@@ -139,11 +156,17 @@ pub fn load_bytes(data: []const u8) !void {
         feature_bias[h] = read_i16(data, off);
         off += 2;
     }
-    for (0..2 * HIDDEN) |i| {
-        output_weights[i] = read_i16(data, off);
+    // l1w is bucket-major (transposed): each bucket's 2*HIDDEN weights contiguous.
+    for (0..OUTPUT_BUCKETS) |b| {
+        for (0..2 * HIDDEN) |i| {
+            output_weights[b][i] = read_i16(data, off);
+            off += 2;
+        }
+    }
+    for (0..OUTPUT_BUCKETS) |b| {
+        output_bias[b] = read_i16(data, off);
         off += 2;
     }
-    output_bias = read_i16(data, off);
 
     net_loaded = true;
 }
@@ -155,9 +178,10 @@ pub fn load_file(allocator: std.mem.Allocator, path: []const u8) !void {
     try load_bytes(data);
 }
 
-// Once a trained net exists, embed it for a dependency-free release build:
-//
-//   const embedded_net = @embedFile("../nets/neurospeed.bin");
-//   pub fn load_embedded() !void { try load_bytes(embedded_net); }
-//
-// (kept commented out so the project builds before the net is trained).
+// The trained Gen-0 net, embedded for a dependency-free release build.
+const embedded_net = @embedFile("nnue_net.bin");
+
+/// Load the embedded net into the module-level parameters and mark it ready.
+pub fn load_embedded() !void {
+    try load_bytes(embedded_net);
+}
