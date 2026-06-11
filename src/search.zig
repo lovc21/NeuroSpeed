@@ -13,6 +13,9 @@ const Move = move_gen.Move;
 
 pub var global_search: Search = undefined;
 pub var global_tt: ?tt_mod.TT = null;
+// When true, suppress all UCI info/bestmove output (used by datagen, which reads
+// global_search.best_move / best_score directly instead of the printed bestmove).
+pub var silent: bool = false;
 
 pub fn search_position(board: *types.Board, max_depth: ?u8, soft_limit: u64, hard_limit: u64, comptime color: types.Color) void {
     global_search.search_position(board, max_depth, soft_limit, hard_limit, color);
@@ -23,6 +26,7 @@ pub fn init_search() void {
 }
 
 fn print(comptime fmt: []const u8, args: anytype) void {
+    if (silent) return;
     const w = std.io.getStdOut().writer();
     w.print(fmt, args) catch {};
 }
@@ -75,6 +79,7 @@ const lmp_table = [2][11]u32{
 
 pub const Search = struct {
     best_move: Move = undefined,
+    best_score: i32 = 0, // stm-relative cp of the deepest completed iteration (for datagen)
     stop_on_time: bool = false,
     stop: bool = false,
     timer: std.time.Timer = undefined,
@@ -972,6 +977,10 @@ pub const Search = struct {
                 const iter_best = self.pv_table[0][0];
                 best_move_found = iter_best;
                 best_completed_depth = current_depth;
+
+                // Persist deepest-completed result for programmatic readers (datagen)
+                self.best_move = iter_best;
+                self.best_score = score;
 
                 // Track move stability: continuous counter 0-10
                 if (prev_best_move.from == iter_best.from and prev_best_move.to == iter_best.to) {

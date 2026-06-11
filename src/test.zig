@@ -10,6 +10,7 @@ const movegen = @import("movegen.zig");
 const lists = @import("lists.zig");
 const zobrist = @import("zobrist.zig");
 const nnue = @import("nnue.zig");
+const datagen = @import("datagen.zig");
 const print = std.debug.print;
 const expect = std.testing.expect;
 
@@ -816,4 +817,55 @@ test "nnue evaluate is mirror-symmetric (encoding + eval are correct)" {
 
     // Same stm-relative score for any weights iff the perspective encoding is right.
     try std.testing.expectEqual(nnue.evaluate(&p), nnue.evaluate(&m));
+}
+
+test "datagen board_to_fen round-trips through parse_fen" {
+    // Serialize a parsed board, re-parse it, and require identical board state.
+    // This covers piece placement, side, castling, en passant and halfmove.
+    const fens = [_][]const u8{
+        types.start_position,
+        types.tricky_position,
+        types.killer_position,
+        "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1",
+        "rnbqkb1r/pp1p1pPp/8/2p1pP2/1P1P4/3P3P/P1P1P3/RNBQKBNR w KQkq e6 0 1",
+        "r2q1rk1/ppp2ppp/2n1bn2/2b1p3/3pP3/3P1NPP/PPP1NPB1/R1BQ1RK1 b - - 0 9",
+        "8/8/8/2k5/2pP4/8/B7/4K3 b - d3 0 3",
+        "4k3/8/8/8/8/8/8/4K3 w - - 13 47",
+    };
+
+    var buf: [128]u8 = undefined;
+    for (fens) |fen| {
+        var b1 = types.Board.new();
+        try bitboard.parse_fen(fen, &b1);
+
+        // fullmove is not stored on the board, so it cannot affect round-trip state.
+        const out = datagen.board_to_fen(&b1, 1, buf[0..]);
+
+        var b2 = types.Board.new();
+        try bitboard.parse_fen(out, &b2);
+
+        if (b1.hash != b2.hash) {
+            print("round-trip mismatch: {s}\n  -> {s}\n", .{ fen, out });
+        }
+        try std.testing.expectEqual(b1.side, b2.side);
+        try std.testing.expectEqual(b1.castle, b2.castle);
+        try std.testing.expectEqual(b1.enpassant, b2.enpassant);
+        try std.testing.expectEqual(b1.halfmove, b2.halfmove);
+        try std.testing.expectEqual(b1.hash, b2.hash);
+        for (b1.pieces, b2.pieces) |p1, p2| {
+            try std.testing.expectEqual(p1, p2);
+        }
+    }
+}
+
+test "datagen board_to_fen exact start-position string" {
+    var board = types.Board.new();
+    try bitboard.parse_fen(types.start_position, &board);
+
+    var buf: [128]u8 = undefined;
+    const fen = datagen.board_to_fen(&board, 1, buf[0..]);
+    try std.testing.expectEqualStrings(
+        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+        fen,
+    );
 }

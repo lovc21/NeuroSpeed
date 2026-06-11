@@ -9,6 +9,7 @@ const print = std.debug.print;
 const search = @import("search.zig");
 const lists = @import("lists.zig");
 const eval = @import("evaluation.zig");
+const nnue = @import("nnue.zig");
 
 const UCI_COMMANDS_MAX: usize = 10000;
 const VERSION: []const u8 = "0.1";
@@ -384,6 +385,12 @@ pub const UCI = struct {
             search.init_tt(std.heap.page_allocator, clamped);
             print("info string Hash set to {} MB\n", .{clamped});
         }
+
+        if (std.mem.eql(u8, name, "UseNNUE")) {
+            const want = std.ascii.eqlIgnoreCase(value_str, "true");
+            nnue.use_nnue = want and nnue.loaded();
+            print("info string UseNNUE set to {}\n", .{nnue.use_nnue});
+        }
     }
 
     fn searchWrapper(self: *UCI, depth: ?u8, soft_limit: u64, hard_limit: u64) void {
@@ -420,6 +427,7 @@ pub const UCI = struct {
                     try stdout.print("id author {s}\n", .{AUTHOR});
                     try stdout.print("option name Hash type spin default 64 min 1 max 4096\n", .{});
                     try stdout.print("option name Threads type spin default 1 min 1 max 1\n", .{});
+                    try stdout.print("option name UseNNUE type check default true\n", .{});
                     try stdout.print("uciok\n", .{});
                 } else if (std.mem.eql(u8, command, "isready")) {
                     try stdout.print("readyok\n", .{});
