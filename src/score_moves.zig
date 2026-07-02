@@ -22,8 +22,6 @@ pub const MVV_LVA = [6][6]i32{
     // zig fmt: on
 };
 
-const SEE_THRESHOLD = -98;
-
 // Piece values for SEE
 const PIECE_VALUES = [7]i32{ 100, 320, 330, 500, 900, 20000, 0 };
 
@@ -33,9 +31,10 @@ const SCORE_PROMOTION_CAPTURE = 8000000;
 const SCORE_GOOD_CAPTURE = 7000000;
 const SCORE_PROMOTION_QUEEN = 6000000;
 const SCORE_PROMOTION = 5000000;
-const SCORE_EQUAL_CAPTURE = 4000000;
 const SCORE_QUIET = 0;
-const SCORE_BAD_CAPTURE = -1000000;
+/// Captures classified SEE-losing at scoring time. Exported so the search can
+/// prune/skip them off the ordering score without re-running SEE.
+pub const SCORE_BAD_CAPTURE = -1000000;
 const SCORE_KILLER = 90000;
 const SCORE_KILLER_2 = 80000;
 const SCORE_COUNTERMOVE = 50000;
@@ -114,16 +113,13 @@ pub inline fn score_move(board: *types.Board, move_list: *lists.MoveList, score_
                 }
 
             if (victim_type != null and attacker_type != null) {
-                
-                if (see(board, move, SEE_THRESHOLD)) {
-                    // Good capture
+                // Single SEE classification at threshold 0: winning/even
+                // captures order above killers, losing captures below quiets
+                // (still MVV-ordered among themselves).
+                if (see(board, move, 0)) {
                     score = SCORE_GOOD_CAPTURE + MVV_LVA[@intFromEnum(victim_type.?)][@intFromEnum(attacker_type.?)];
-                } else if (see(board, move, -100)) {
-                    // Equal trade
-                    score = SCORE_EQUAL_CAPTURE + MVV_LVA[@intFromEnum(victim_type.?)][@intFromEnum(attacker_type.?)];
                 } else {
-                    // Bad capture
-                    score = SCORE_BAD_CAPTURE - MVV_LVA[@intFromEnum(victim_type.?)][@intFromEnum(attacker_type.?)];
+                    score = SCORE_BAD_CAPTURE + MVV_LVA[@intFromEnum(victim_type.?)][@intFromEnum(attacker_type.?)];
                 }
             // En passant capture
             }else {

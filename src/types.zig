@@ -224,25 +224,12 @@ pub const Board = struct {
     }
 
 
-    // Get piece type at square
+    // Get piece type at square — O(1) via the maintained mailbox
+    // (WHITE_* = 0..5, BLACK_* = 8..13, so `& 7` is the piece type).
     pub inline fn get_piece_type_at(self: *const Board, sq: u6) ?PieceType {
-        const bb_mask = @as(u64, 1) << sq;
-     
-        if (self.pieces[@intFromEnum(Piece.WHITE_PAWN)] & bb_mask != 0) return PieceType.Pawn;
-        if (self.pieces[@intFromEnum(Piece.WHITE_KNIGHT)] & bb_mask != 0) return PieceType.Knight;
-        if (self.pieces[@intFromEnum(Piece.WHITE_BISHOP)] & bb_mask != 0) return PieceType.Bishop;
-        if (self.pieces[@intFromEnum(Piece.WHITE_ROOK)] & bb_mask != 0) return PieceType.Rook;
-        if (self.pieces[@intFromEnum(Piece.WHITE_QUEEN)] & bb_mask != 0) return PieceType.Queen;
-        if (self.pieces[@intFromEnum(Piece.WHITE_KING)] & bb_mask != 0) return PieceType.King;
-        
-        if (self.pieces[@intFromEnum(Piece.BLACK_PAWN)] & bb_mask != 0) return PieceType.Pawn;
-        if (self.pieces[@intFromEnum(Piece.BLACK_KNIGHT)] & bb_mask != 0) return PieceType.Knight;
-        if (self.pieces[@intFromEnum(Piece.BLACK_BISHOP)] & bb_mask != 0) return PieceType.Bishop;
-        if (self.pieces[@intFromEnum(Piece.BLACK_ROOK)] & bb_mask != 0) return PieceType.Rook;
-        if (self.pieces[@intFromEnum(Piece.BLACK_QUEEN)] & bb_mask != 0) return PieceType.Queen;
-        if (self.pieces[@intFromEnum(Piece.BLACK_KING)] & bb_mask != 0) return PieceType.King;
-        
-        return null;
+        const piece = self.board[sq];
+        if (piece == Piece.NO_PIECE) return null;
+        return @enumFromInt(@intFromEnum(piece) & 7);
     }
 
 
@@ -262,9 +249,9 @@ pub const Board = struct {
     return Piece.NO_PIECE;
 }
 
-    // Get piece color at square
+    // Get piece color at square — O(1) via the maintained mailbox
     pub inline fn get_piece_color_at(self: *const Board, sq: u6) ?Color {
-        const piece = self.get_piece_at(sq);
+        const piece = self.board[sq];
         if (piece == Piece.NO_PIECE) return null;
         return if (@intFromEnum(piece) < 6) Color.White else Color.Black;
     }

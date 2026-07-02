@@ -12,6 +12,7 @@ const uci = @import("uci.zig");
 const eval = @import("evaluation.zig");
 const search = @import("search.zig");
 const datagen = @import("datagen.zig");
+const rescore = @import("rescore.zig");
 const nnue = @import("nnue.zig");
 const debug = false;
 
@@ -97,6 +98,14 @@ pub fn main() !void {
         return;
     }
 
+    // Subcommand: `NeuroSpeed rescore [options]` → re-label a bulletformat file
+    // with the embedded NNUE via shallow search (Gen-3 data lever).
+    if (argv.len >= 2 and std.ascii.eqlIgnoreCase(argv[1], "rescore")) {
+        const cfg = try rescore.parse_args(argv[2..]);
+        try rescore.run(allocator, cfg);
+        return;
+    }
+
     // Datagen (above) stays on the HCE; everything else uses the embedded NNUE.
     try nnue.load_embedded();
     nnue.use_nnue = true;
@@ -106,6 +115,10 @@ pub fn main() !void {
     for (argv[1..]) |arg| {
         if (std.ascii.eqlIgnoreCase(arg, "bench")) {
             do_bench = true;
+        }
+        // Debug: refresh-and-compare the incremental accumulator on every eval.
+        if (std.ascii.eqlIgnoreCase(arg, "verify")) {
+            nnue.verify_incremental = true;
         }
         if (std.fmt.parseUnsigned(u8, arg, 10)) |depth| {
             bench_depth = depth;
@@ -167,6 +180,9 @@ fn run_bench(depth: u8) void {
         "r2qk2r/ppp1bppp/5n2/3p4/3Pn3/3B1N2/PPP2PPP/RNBQ1RK1 w kq - 0 8",
     };
 
+    // Real searches run with a TT; bench must too, or TT patches are invisible.
+    search.init_tt(std.heap.page_allocator, 64);
+
     var total_nodes: u64 = 0;
     var timer = std.time.Timer.start() catch {
         print("Fatal: timer failed to start\n", .{});
@@ -178,6 +194,7 @@ fn run_bench(depth: u8) void {
         bitboard.parse_fen(fen, &board) catch continue;
 
         search.init_search();
+        if (search.global_tt) |*tt| tt.clear();
 
         if (board.side == types.Color.White) {
             search.search_position(&board, depth, 0, 0, types.Color.White);

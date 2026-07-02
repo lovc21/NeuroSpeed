@@ -9,6 +9,7 @@ const move_scores = @import("score_moves.zig");
 const tt_mod = @import("tt.zig");
 const zobrist = @import("zobrist.zig");
 const movegen = @import("movegen.zig");
+const nnue = @import("nnue.zig");
 const Move = move_gen.Move;
 
 pub var global_search: Search = undefined;
@@ -23,6 +24,7 @@ pub fn search_position(board: *types.Board, max_depth: ?u8, soft_limit: u64, har
 
 pub fn init_search() void {
     global_search = Search.new();
+    clear_corrhist();
 }
 
 fn print(comptime fmt: []const u8, args: anytype) void {
@@ -49,14 +51,117 @@ pub fn deinit_tt() void {
     }
 }
 
-const INFINITY: i32 = 50000;
-const MATE_VALUE: i32 = 49000;
+// Mate scores must survive the i16 TT score field: |MATE_VALUE| + MAX_PLY
+// (score_to_tt adds the ply) has to stay <= 32767, else stored mates get
+// clamped to 32767 and read back as huge *non-mate* evals (bogus cutoffs).
+const INFINITY: i32 = 32500;
+const MATE_VALUE: i32 = 32000;
+const MATE_THRESHOLD: i32 = MATE_VALUE - @as(i32, MAX_PLY); // |score| above => a mate
 const MAX_PLY: usize = 128;
 const MAX_QUIESCENCE_DEPTH: i8 = 16;
 
-// Precomputed Late Move Reduction table
-// Formula: R = 1 + ln(depth) * ln(moveNumber) / 2.0
-const lmr_reductions: [64][64]u8 = init: {
+// ===========================================================================
+// Pawn correction history: a table of how much the static eval has historically
+// differed from the search result, keyed by pawn structure x side-to-move. The
+// static eval is nudged toward what search actually returns, which is worth
+// ~+20-40 Elo in most engines (per NNUE-engine devlogs). Stored as cp*GRAIN.
+// ===========================================================================
+const CORRHIST_ON: bool = false;
+const CORR_BITS: usize = 11;
+const CORR_SIZE: usize = 1 << CORR_BITS; // 2048 buckets (16KB table, L1-resident)
+const CORR_GRAIN: i32 = 256; // fixed-point: stored value = cp * 256
+const CORR_MAX: i32 = 64 * CORR_GRAIN; // each table's correction capped <= 64 cp
+const CORR_DELTA_CLAMP: i32 = 192; // single-update (best-raw) delta clamp, cp
+// Two stacked correction histories: pawn structure + non-pawn piece placement.
+// Pawn-only was neutral for our learned NNUE; stacking the non-pawn table is how
+// engines reach the full corrhist gain.
+var pawn_corrhist: [2][CORR_SIZE]i32 = std.mem.zeroes([2][CORR_SIZE]i32);
+var nonpawn_corrhist: [2][CORR_SIZE]i32 = std.mem.zeroes([2][CORR_SIZE]i32);
+
+pub fn clear_corrhist() void {
+    pawn_corrhist = std.mem.zeroes([2][CORR_SIZE]i32);
+    nonpawn_corrhist = std.mem.zeroes([2][CORR_SIZE]i32);
+}
+
+inline fn mix2(a: u64, b: u64) u64 {
+    var h: u64 = a *% 0x9E3779B97F4A7C15;
+    h = (h ^ b) *% 0xBF58476D1CE4E5B9;
+    h ^= h >> 31;
+    return h;
+}
+
+/// O(1) structure keys from bitboards — placement IS the bitboards, no per-node
+/// loop, no incremental maintenance.
+inline fn pawn_idx(board: *const types.Board) usize {
+    const wp = board.pieces[types.Piece.WHITE_PAWN.toU4()];
+    const bp = board.pieces[types.Piece.BLACK_PAWN.toU4()];
+    return @as(usize, @intCast(mix2(wp, bp) & (CORR_SIZE - 1)));
+}
+inline fn nonpawn_idx(board: *const types.Board) usize {
+    const p = &board.pieces;
+    const wnp = p[1] | p[2] | p[3] | p[4] | p[5]; // white N,B,R,Q,K placement
+    const bnp = p[9] | p[10] | p[11] | p[12] | p[13];
+    return @as(usize, @intCast(mix2(wnp, bnp) & (CORR_SIZE - 1)));
+}
+
+/// Combined correction (cp) = pawn-structure + non-pawn-placement tables.
+inline fn corr_value(board: *const types.Board, comptime color: types.Color) i32 {
+    const side: usize = if (color == .White) 0 else 1;
+    const sum = pawn_corrhist[side][pawn_idx(board)] + nonpawn_corrhist[side][nonpawn_idx(board)];
+    return @divTrunc(sum, CORR_GRAIN);
+}
+
+inline fn corr_blend(v: *i32, delta: i32, w: i32) void {
+    v.* = @divTrunc(v.* * (256 - w) + delta * w, 256);
+    v.* = std.math.clamp(v.*, -CORR_MAX, CORR_MAX);
+}
+
+/// Blend both tables toward (best_score - raw_static), depth-weighted EMA.
+inline fn corr_update(board: *const types.Board, comptime color: types.Color, raw_static: i32, best_score: i32, depth: u8) void {
+    const side: usize = if (color == .White) 0 else 1;
+    const raw_delta: i32 = std.math.clamp(best_score - raw_static, -CORR_DELTA_CLAMP, CORR_DELTA_CLAMP);
+    const delta: i32 = raw_delta * CORR_GRAIN; // clamped target, in cp*GRAIN
+    const w: i32 = @min(@as(i32, depth) + 1, 16); // weight grows with depth, cap 16
+    corr_blend(&pawn_corrhist[side][pawn_idx(board)], delta, w);
+    corr_blend(&nonpawn_corrhist[side][nonpawn_idx(board)], delta, w);
+}
+
+// ===========================================================================
+// Tunable search parameters (SPSA at the target TC). Defaults reproduce the
+// previous hardcoded constants exactly — with no setoption calls the engine
+// is bench-identical. Names are exposed 1:1 as UCI spin options.
+// ===========================================================================
+pub var params: Params = .{};
+pub const Params = struct {
+    rfp_base: i32 = 70, // RFP margin slope (improving)
+    rfp_impr: i32 = 20, // extra slope when not improving
+    rfp_depth: i32 = 8, // RFP max depth
+    razor_base: i32 = 150,
+    razor_impr: i32 = 75,
+    nmp_base: i32 = 3, // NMP R = base + depth/div
+    nmp_div: i32 = 6,
+    fut_base: i32 = 200, // futility margin = base*depth (depth 1-3)
+    fut_impr: i32 = 80, // extra margin when not improving
+    lmp_mult: i32 = 100, // % multiplier on the LMP thresholds
+    lmr_base: i32 = 100, // LMR = base/100 + ln*ln/(div/100)
+    lmr_div: i32 = 200,
+    lmr_hist_div: i32 = 4000,
+    lmr_evald_div: i32 = 350,
+    lmr_movegate: i32 = 4, // first N legal moves exempt from LMR
+    histprune_mult: i32 = 2000, // skip quiets with hist < -mult*depth
+    asp_delta: i32 = 25, // first aspiration half-window
+    tm_gate_pct: i32 = 60, // start next iteration only if elapsed < pct% of soft
+    tm_stab_coef: i32 = 4, // soft-limit factor: 1 - coef/100*stability ...
+    tm_impr_coef: i32 = 4, // ... - coef/100*score-trend
+    qs_delta: i32 = 150, // qsearch delta-pruning margin
+    se_depth: i32 = 8, // singular-extension min depth (LTC-scaler: bullet test)
+    iir_depth: i32 = 4, // IIR min depth (LTC-scaler: bullet test)
+};
+
+// Late Move Reduction table. Comptime-initialized with the default formula
+// (base 1.0, div 2.0 — matching Params defaults) so no init-order hazard;
+// rebuild_tables() overwrites it when params change via setoption.
+var lmr_reductions: [64][64]u8 = init: {
     @setEvalBranchQuota(10000);
     var table: [64][64]u8 = .{[_]u8{0} ** 64} ** 64;
     for (1..64) |d| {
@@ -69,6 +174,23 @@ const lmr_reductions: [64][64]u8 = init: {
     }
     break :init table;
 };
+
+pub fn rebuild_tables() void {
+    const base: f64 = @as(f64, @floatFromInt(params.lmr_base)) / 100.0;
+    const div: f64 = @as(f64, @floatFromInt(params.lmr_div)) / 100.0;
+    for (0..64) |d| {
+        for (0..64) |m| {
+            if (d == 0 or m == 0) {
+                lmr_reductions[d][m] = 0;
+                continue;
+            }
+            const df: f64 = @floatFromInt(d);
+            const mf: f64 = @floatFromInt(m);
+            const r: f64 = base + @log(df) * @log(mf) / div;
+            lmr_reductions[d][m] = @intFromFloat(@min(@max(r, 0.0), 63.0));
+        }
+    }
+}
 
 // Late Move Pruning thresholds: lmp_table[improving][depth]
 // not-improving row: fewer quiets searched; improving row: more quiets allowed
@@ -110,6 +232,12 @@ pub const Search = struct {
     // Time management
     soft_limit: u64 = 0, // Target time
     hard_limit: u64 = 0, // Absolute limit
+
+    // Node limits (datagen soft-node search; 0 = disabled). Soft is only
+    // checked between ID iterations, hard aborts mid-search like a time-out.
+    soft_nodes: u64 = 0,
+    hard_nodes: u64 = 0,
+    hard_node_hit: bool = false, // current search aborted on hard_nodes
 
     // Eval stack for improving heuristic: static eval at each ply
     // -INFINITY sentinel means this ply was in check (no static eval computed)
@@ -185,10 +313,16 @@ pub const Search = struct {
     }
 
     inline fn check_time(self: *Search) void {
-        if (self.hard_limit > 0 and (self.nodes & 2047) == 0) {
-            const elapsed = self.timer.read() / std.time.ns_per_ms;
-            if (elapsed >= self.hard_limit) {
+        if ((self.nodes & 2047) == 0) {
+            if (self.hard_limit > 0) {
+                const elapsed = self.timer.read() / std.time.ns_per_ms;
+                if (elapsed >= self.hard_limit) {
+                    self.stop = true;
+                }
+            }
+            if (self.hard_nodes > 0 and self.nodes >= self.hard_nodes) {
                 self.stop = true;
+                self.hard_node_hit = true;
             }
         }
     }
@@ -261,20 +395,52 @@ pub const Search = struct {
 
         if (alpha >= adj_beta) return alpha;
 
+        const is_pv = (adj_beta - alpha) > 1;
+
+        // TT probe: any stored depth suffices for a qsearch cutoff, and the TT
+        // move replaces the (provably dead) PV-table ordering fallback.
+        var tt_move: Move = Move.empty();
+        var tt_static: i16 = tt_mod.NO_EVAL;
+        if (global_tt) |*tt| {
+            if (tt.probe(board.hash)) |entry| {
+                tt_move = entry.best_move;
+                tt_static = entry.static_eval;
+                if (!is_pv) {
+                    const tts = score_from_tt(entry.score, self.ply);
+                    switch (entry.flag) {
+                        .EXACT => return tts,
+                        .LOWER => if (tts >= adj_beta) return tts,
+                        .UPPER => if (tts <= alpha) return tts,
+                        .NONE => {},
+                    }
+                }
+            }
+        }
+
         // Check if king is in check
         const in_check = self.is_king_in_check(board, color);
 
         var best_score: i32 = undefined;
+        var static_for_tt: i16 = tt_mod.NO_EVAL;
 
         if (in_check) {
             // If in check, we must search all moves to escape check
             best_score = -MATE_VALUE + @as(i32, @intCast(self.ply));
         } else {
             // Standing pat - current position evaluation as lower bound
-            best_score = eval.global_evaluator.eval(board, color, alpha, adj_beta);
+            // (reuse the TT-cached static eval; NNUE eval is position-pure)
+            if (nnue.use_nnue and tt_static != tt_mod.NO_EVAL) {
+                best_score = tt_static;
+            } else {
+                best_score = eval.global_evaluator.eval(board, color, alpha, adj_beta);
+            }
+            static_for_tt = @intCast(std.math.clamp(best_score, -30000, 30000));
 
             // Standing pat cutoff
             if (best_score >= adj_beta) {
+                if (global_tt) |*tt| {
+                    tt.store(board.hash, 0, score_to_tt(best_score, self.ply), .LOWER, Move.empty(), static_for_tt);
+                }
                 return best_score;
             }
 
@@ -296,19 +462,18 @@ pub const Search = struct {
             return -MATE_VALUE + @as(i32, @intCast(self.ply));
         }
 
-        const pv_move = if (self.pv_length[self.ply] > 0)
-            self.pv_table[self.ply][0]
-        else
-            move_gen.Move.empty();
-
-        // Score moves for move ordering
+        // Score moves for move ordering (TT move first when available)
         var score_list: lists.ScoreList = .{};
-        move_scores.score_move(board, &move_list, &score_list, pv_move, Move.empty());
+        move_scores.score_move(board, &move_list, &score_list, tt_move, Move.empty());
 
         const piece_values = [_]i32{ 100, 320, 330, 500, 900, 10000 }; // P, N, B, R, Q, K
 
+        var best_move_q: Move = Move.empty();
         for (0..move_list.count) |i| {
             const move = move_scores.get_next_best_move(&move_list, &score_list, i);
+            // Ordering score of `move` (post-swap, slot i) — carries the SEE
+            // classification computed once in score_move.
+            const mscore = score_list.scores[i];
 
             // Capture pruning (only when not in check, and not for promotions which are
             // rare and important enough to always search).
@@ -319,14 +484,15 @@ pub const Search = struct {
                     const victim_type = board.get_piece_type_at(move.to);
                     if (victim_type) |vt| {
                         const victim_value = piece_values[@intFromEnum(vt)];
-                        if (best_score + victim_value + 150 < alpha) {
+                        if (best_score + victim_value + params.qs_delta < alpha) {
                             continue;
                         }
                     }
-                }
-                // SEE pruning: skip captures that lose material (static exchange < 0).
-                if (!move_scores.see(board, move, 0)) {
-                    continue;
+                    // SEE pruning via ordering class: skip losing captures
+                    // (EP excluded above; promos excluded by the outer guard).
+                    if (mscore <= move_scores.SCORE_BAD_CAPTURE + 3000) {
+                        continue;
+                    }
                 }
             }
 
@@ -345,6 +511,7 @@ pub const Search = struct {
             // Update best score
             if (score > best_score) {
                 best_score = score;
+                best_move_q = move;
 
                 if (score > alpha) {
                     alpha = score;
@@ -354,10 +521,19 @@ pub const Search = struct {
                     }
 
                     if (alpha >= adj_beta) {
+                        if (global_tt) |*tt| {
+                            tt.store(board.hash, 0, score_to_tt(score, self.ply), .LOWER, move, static_for_tt);
+                        }
                         return alpha;
                     }
                 }
             }
+        }
+
+        // Store the qsearch result (depth 0): EXACT if alpha was raised, else UPPER.
+        if (global_tt) |*tt| {
+            const flag: tt_mod.TTFlag = if (best_score > mut_alpha) .EXACT else .UPPER;
+            tt.store(board.hash, 0, score_to_tt(best_score, self.ply), flag, best_move_q, static_for_tt);
         }
 
         return best_score;
@@ -389,6 +565,12 @@ pub const Search = struct {
         // Quiescence search
         if (depth_in == 0) {
             return self.quiescence(board, mut_alpha, beta, 0, color);
+        }
+
+        // Hard ply ceiling (mirrors qsearch): bounds the NNUE accumulator stack
+        // and all per-ply arrays even under repeated check/singular extensions.
+        if (self.ply >= MAX_PLY - 1) {
+            return eval.global_evaluator.eval(board, color, mut_alpha, beta);
         }
 
         self.nodes += 1;
@@ -447,6 +629,7 @@ pub const Search = struct {
         var tt_score_se: i32 = 0; // TT score saved for singular extension
         var tt_depth_se: u8 = 0; // TT depth saved for singular extension
         var tt_bound_se: tt_mod.TTFlag = .NONE; // TT bound saved for singular extension
+        var tt_static_eval: i16 = tt_mod.NO_EVAL; // cached static eval from TT
         if (!skip_move) {
             if (global_tt) |*tt| {
                 if (tt.probe(board.hash)) |entry| {
@@ -455,6 +638,7 @@ pub const Search = struct {
                     tt_score_se = score_from_tt(entry.score, self.ply);
                     tt_depth_se = entry.depth;
                     tt_bound_se = entry.flag;
+                    tt_static_eval = entry.static_eval;
 
                     // Use TT score for cutoffs at non-PV nodes with sufficient depth
                     if (!is_root and !is_pv_node and entry.depth >= depth) {
@@ -475,7 +659,7 @@ pub const Search = struct {
 
         // Internal Iterative Reduction (IIR): reduce depth when no TT move
         // Avoids wasting time at high depths when move ordering is poor
-        if (depth >= 4 and !tt_hit and !is_root) {
+        if (@as(i32, depth) >= params.iir_depth and !tt_hit and !is_root) {
             depth -= 1;
         }
 
@@ -489,9 +673,24 @@ pub const Search = struct {
         // Static eval and improving heuristic
         // Compute eval at all non-check nodes; store in eval_stack for improving detection
         var static_eval: i32 = 0;
+        var raw_static_eval: i32 = 0; // uncorrected — stored in TT and the corrhist baseline
         var improving: u1 = 0;
         if (!in_check) {
-            static_eval = eval.global_evaluator.eval(board, color, alpha, adj_beta);
+            // Reuse the TT-cached static eval when possible. NNUE eval is a pure
+            // function of the position so this is bit-identical; HCE's lazy
+            // alpha/beta cutoff makes its value window-dependent, so skip there.
+            if (nnue.use_nnue and tt_static_eval != tt_mod.NO_EVAL) {
+                static_eval = tt_static_eval;
+            } else {
+                static_eval = eval.global_evaluator.eval(board, color, alpha, adj_beta);
+            }
+            raw_static_eval = static_eval;
+            // Pawn correction history: nudge the NNUE static eval toward what
+            // search historically returned for this pawn structure. Clamp so the
+            // correction can never push the eval into mate-score territory.
+            if (CORRHIST_ON and nnue.use_nnue) {
+                static_eval = std.math.clamp(static_eval + corr_value(board, color), -MATE_THRESHOLD + 1, MATE_THRESHOLD - 1);
+            }
             if (self.ply < MAX_PLY) self.eval_stack[self.ply] = static_eval;
 
             // Improving: are we doing better than 2 or 4 plies ago (same side to move)?
@@ -506,12 +705,19 @@ pub const Search = struct {
             if (self.ply < MAX_PLY) self.eval_stack[self.ply] = -INFINITY;
         }
 
+        // Static eval as stored into the TT (sentinel when in check). Evals are
+        // a few hundred cp in practice; the clamp can't bite, it only guards i16.
+        const se_for_tt: i16 = if (in_check)
+            tt_mod.NO_EVAL
+        else
+            @intCast(std.math.clamp(raw_static_eval, -30000, 30000));
+
         const can_static_prune = !is_pv_node and !in_check and !skip_move;
         const impr: i32 = @intCast(improving);
         if (can_static_prune) {
-            // Reverse Futility Pruning (RFP): improving-aware margins, extended to depth<=8
-            if (depth <= 8) {
-                const rfp_margin: i32 = (70 + 20 * (1 - impr)) * @as(i32, depth);
+            // Reverse Futility Pruning (RFP): improving-aware margins
+            if (depth <= params.rfp_depth) {
+                const rfp_margin: i32 = (params.rfp_base + params.rfp_impr * (1 - impr)) * @as(i32, depth);
                 if (static_eval - rfp_margin >= adj_beta) {
                     return static_eval;
                 }
@@ -519,7 +725,7 @@ pub const Search = struct {
 
             // Razoring: at very shallow depth, run qsearch to verify we can beat alpha
             if (depth <= 2) {
-                const razor_margin: i32 = 150 + impr * 75;
+                const razor_margin: i32 = params.razor_base + impr * params.razor_impr;
                 if (static_eval + razor_margin <= alpha) {
                     const razor_score = self.quiescence(board, alpha - 1, alpha, 0, color);
                     if (razor_score <= alpha) return razor_score;
@@ -560,8 +766,8 @@ pub const Search = struct {
                 }
                 self.ply += 1;
 
-                // Adaptive reduction: R = 3 + depth/6
-                const R: u8 = 3 + depth / 6;
+                // Adaptive reduction: R = base + depth/div
+                const R: u8 = @intCast(params.nmp_base + @divTrunc(@as(i32, depth), params.nmp_div));
                 const null_depth: u8 = if (depth > R) depth - R else 0;
 
                 const null_score = -self.negamax(board, null_depth, -adj_beta, -adj_beta + 1, false, Move.empty(), opponent);
@@ -582,9 +788,8 @@ pub const Search = struct {
 
         // Futility pruning flag: at shallow depths, skip quiet moves
         // Non-improving positions get extra margin (search more carefully when behind)
-        const futility_margins = [4]i32{ 0, 200, 400, 600 };
         const futility_pruning = can_static_prune and depth >= 1 and depth <= 3 and
-            static_eval + futility_margins[@as(usize, depth)] + (1 - impr) * 80 < alpha;
+            static_eval + params.fut_base * @as(i32, depth) + (1 - impr) * params.fut_impr < alpha;
 
         // Generate legal moves (no need for legality check in make_move)
         var move_list: lists.MoveList = .{};
@@ -616,10 +821,25 @@ pub const Search = struct {
         var n_quiets: u32 = 0;
         for (0..move_list.count) |i| {
             const move = move_scores.get_next_best_move(&move_list, &score_list, i);
+            const mscore = score_list.scores[i]; // ordering score (SEE class)
 
             // Skip the excluded move during singular extension searches
             if (skip_move and move.from == self.excluded[self.ply].from and
                 move.to == self.excluded[self.ply].to) continue;
+
+            // SEE pruning: at shallow non-PV nodes, skip captures that lose
+            // serious, depth-scaled material. The boolean ordering class
+            // (SEE<0) preselects candidates; the precise threshold check runs
+            // only for those, and the skip happens BEFORE make_move_search.
+            // Small SEE losses stay searched — they often carry tactics.
+            if (!in_check and !is_pv_node and depth <= 6 and legal_moves >= 1 and
+                move.is_capture() and !move.is_promotion() and
+                move.flags != types.MoveFlags.EN_PASSANT and
+                mscore <= move_scores.SCORE_BAD_CAPTURE + 3000 and
+                !move_scores.see(board, move, -60 * @as(i32, depth)))
+            {
+                continue;
+            }
 
             // Singular Extension (C2): check if TT move is the only good move
             // We search all other moves at reduced depth to verify the TT move is "singular".
@@ -627,7 +847,7 @@ pub const Search = struct {
             var se_extension: u8 = 0;
             const is_tt_move = !tt_move.is_empty() and
                 move.from == tt_move.from and move.to == tt_move.to;
-            if (!is_root and !skip_move and depth >= 8 and is_tt_move and
+            if (!is_root and !skip_move and @as(i32, depth) >= params.se_depth and is_tt_move and
                 tt_depth_se + 3 >= depth and tt_bound_se == .LOWER and
                 @abs(tt_score_se) < MATE_VALUE - 100)
             {
@@ -689,7 +909,10 @@ pub const Search = struct {
                 is_quiet and !gives_check)
             {
                 quiet_count += 1;
-                const lmp_threshold = lmp_table[@intCast(improving)][@min(@as(usize, depth), 10)];
+                const lmp_threshold = @as(u32, @intCast(@divTrunc(
+                    @as(i32, @intCast(lmp_table[@intCast(improving)][@min(@as(usize, depth), 10)])) * params.lmp_mult,
+                    100,
+                )));
                 if (quiet_count > lmp_threshold) {
                     self.ply -= 1;
                     move_gen.unmake_move_search(board, move, undo);
@@ -724,7 +947,7 @@ pub const Search = struct {
 
                 // History-based pruning: skip quiets with terrible combined history
                 if (!in_check and !is_pv_node and depth <= 4 and
-                    full_hist < -2000 * @as(i32, depth))
+                    full_hist < -params.histprune_mult * @as(i32, depth))
                 {
                     self.ply -= 1;
                     move_gen.unmake_move_search(board, move, undo);
@@ -752,7 +975,7 @@ pub const Search = struct {
                 const is_capture_move = move.is_capture();
                 const is_promotion_move = move.is_promotion();
 
-                if (depth >= 3 and legal_moves >= 4 and !in_check and !is_capture_move and !is_promotion_move) {
+                if (depth >= 3 and legal_moves >= params.lmr_movegate and !in_check and !is_capture_move and !is_promotion_move) {
                     // Check if move is a killer at the parent ply
                     const parent_ply = self.ply - 1;
                     const is_killer = (move.from == self.killer_moves[0][parent_ply].from and
@@ -767,10 +990,10 @@ pub const Search = struct {
                         // C3: not improving → reduce more
                         if (improving == 0) r += 1;
                         // C3: history-based adjustment (good history = less reduction, bad = more)
-                        r -= @as(i16, @intCast(@max(-4, @min(4, @divTrunc(full_hist, 4000)))));
+                        r -= @as(i16, @intCast(@max(-4, @min(4, @divTrunc(full_hist, params.lmr_hist_div)))));
                         // C3: eval-distance adjustment (far from alpha = more reduction)
                         const eval_dist: i32 = if (static_eval >= alpha) static_eval - alpha else alpha - static_eval;
-                        r += @as(i16, @intCast(@min(@as(i32, 2), @divTrunc(eval_dist, 350))));
+                        r += @as(i16, @intCast(@min(@as(i32, 2), @divTrunc(eval_dist, params.lmr_evald_div))));
                         // Clamp: [0, new_depth - 1]
                         r = @max(0, @min(r, @as(i16, @intCast(new_depth)) - 1));
                         reduction = @intCast(r);
@@ -845,8 +1068,15 @@ pub const Search = struct {
                             score_to_tt(score, self.ply),
                             .LOWER,
                             move,
+                            se_for_tt,
                         );
                     }
+                }
+
+                // Correction history (fail-high = LOWER bound): only a POSITIVE
+                // correction is valid here — the static eval under-predicted.
+                if (CORRHIST_ON and nnue.use_nnue and !in_check and !skip_move and !move.is_capture() and best_score > raw_static_eval and best_score < MATE_THRESHOLD and best_score > -MATE_THRESHOLD) {
+                    corr_update(board, color, raw_static_eval, best_score, depth);
                 }
 
                 return adj_beta;
@@ -897,8 +1127,17 @@ pub const Search = struct {
                     score_to_tt(alpha, self.ply),
                     tt_flag,
                     best_so_far,
+                    se_for_tt,
                 );
             }
+        }
+
+        // Correction history at a non-cutoff node: an EXACT node (alpha raised)
+        // gives the true value -> update either way; a FAIL-LOW node is an UPPER
+        // bound -> only a NEGATIVE correction (best_score below static) is valid.
+        const corr_dir_ok = (alpha > old_alpha) or (best_score < raw_static_eval);
+        if (CORRHIST_ON and nnue.use_nnue and !in_check and !skip_move and corr_dir_ok and !best_so_far.is_empty() and !best_so_far.is_capture() and best_score < MATE_THRESHOLD and best_score > -MATE_THRESHOLD) {
+            corr_update(board, color, raw_static_eval, best_score, depth);
         }
 
         // node fails low
@@ -909,13 +1148,34 @@ pub const Search = struct {
     pub fn search_position(self: *Search, board: *types.Board, max_depth: ?u8, soft_limit_ms: u64, hard_limit_ms: u64, comptime color: types.Color) void {
         self.nodes = 0;
         self.stop = false;
+        self.hard_node_hit = false;
         self.timer = std.time.Timer.start() catch unreachable;
         self.soft_limit = soft_limit_ms;
         self.hard_limit = hard_limit_ms;
         self.ply = 0; // Reset ply counter
         self.clear_pv_table();
+        self.best_move = Move.empty();
         var best_move_found: ?move_gen.Move = null;
         var best_completed_depth: u8 = 0;
+
+        // Root accumulator for incremental NNUE updates during this search.
+        // (Datagen runs with use_nnue=false, so its searches skip all of this.)
+        if (nnue.use_nnue) nnue.stack_init(board);
+        defer nnue.stack_stop();
+
+        // Forced move: with a single legal reply, a deep search can't change
+        // the move — spend a fraction of the budget and bank the clock.
+        if (self.soft_limit > 0) {
+            var root_moves: lists.MoveList = .{};
+            if (board.side == types.Color.White) {
+                movegen.generate_legal_moves(board, &root_moves, types.Color.White);
+            } else {
+                movegen.generate_legal_moves(board, &root_moves, types.Color.Black);
+            }
+            if (root_moves.count == 1) {
+                self.soft_limit = @max(1, self.soft_limit / 5);
+            }
+        }
 
         // Signal new search to TT for age-based replacement
         if (global_tt) |*tt| {
@@ -940,8 +1200,8 @@ pub const Search = struct {
 
             if (current_depth >= 4) {
                 // Aspiration windows: search with narrow window around previous score
-                // Widening sequence: ±25 → ±100 → ±400 → full window
-                var delta: i32 = 25;
+                // Widening sequence: ±d → ±4d → ±16d → full window
+                var delta: i32 = params.asp_delta;
                 var asp_alpha: i32 = @max(prev_score - delta, -INFINITY);
                 var asp_beta: i32 = @min(prev_score + delta, INFINITY);
 
@@ -952,11 +1212,11 @@ pub const Search = struct {
 
                     if (score <= asp_alpha) {
                         // Fail low: widen alpha
-                        delta = if (delta <= 25) @as(i32, 100) else if (delta <= 100) @as(i32, 400) else INFINITY;
+                        delta = if (delta >= params.asp_delta * 16) INFINITY else delta * 4;
                         asp_alpha = if (delta >= INFINITY) -INFINITY else @max(prev_score - delta, -INFINITY);
                     } else if (score >= asp_beta) {
                         // Fail high: widen beta
-                        delta = if (delta <= 25) @as(i32, 100) else if (delta <= 100) @as(i32, 400) else INFINITY;
+                        delta = if (delta >= params.asp_delta * 16) INFINITY else delta * 4;
                         asp_beta = if (delta >= INFINITY) INFINITY else @min(prev_score + delta, INFINITY);
                     } else {
                         break;
@@ -990,6 +1250,9 @@ pub const Search = struct {
                 }
                 prev_best_move = iter_best;
             }
+
+            // Soft node limit (datagen): don't start another iteration once hit.
+            if (self.soft_nodes > 0 and self.nodes >= self.soft_nodes) break;
 
             const elapsed = self.timer.read() / std.time.ns_per_ms;
 
@@ -1061,20 +1324,32 @@ pub const Search = struct {
             if (self.soft_limit > 0) {
                 const stab_f: f32 = @floatFromInt(stability_counter);
                 const impr_f: f32 = @floatFromInt(improving);
-                var factor: f32 = 1.0 - 0.04 * stab_f - 0.04 * impr_f;
+                const stab_c: f32 = @as(f32, @floatFromInt(params.tm_stab_coef)) / 100.0;
+                const impr_c: f32 = @as(f32, @floatFromInt(params.tm_impr_coef)) / 100.0;
+                var factor: f32 = 1.0 - stab_c * stab_f - impr_c * impr_f;
                 factor = @max(0.5, @min(1.5, factor));
 
                 const adjusted_limit: u64 = @intFromFloat(@as(f32, @floatFromInt(self.soft_limit)) * factor);
                 const effective_limit = @min(adjusted_limit, self.hard_limit);
 
-                if (elapsed > effective_limit) {
+                // Predictive gate: the next iteration costs a multiple of this
+                // one, so starting it near the soft limit mostly burns clock.
+                // Only start if under tm_gate_pct% of the (adjusted) budget.
+                if (elapsed * 100 >= effective_limit * @as(u64, @intCast(params.tm_gate_pct))) {
                     break;
                 }
             }
         }
 
-        // Output best move
-        if (best_move_found) |best_move| {
+        // Output best move. Prefer self.best_move: it equals the deepest
+        // completed iteration's move, plus any root improvement found during a
+        // partially completed (interrupted) iteration — most bullet moves end
+        // mid-iteration, so discarding partial root results wastes real Elo.
+        const final_move: ?move_gen.Move = if (!self.best_move.is_empty())
+            self.best_move
+        else
+            best_move_found;
+        if (final_move) |best_move| {
             const from = types.SquareString.getSquareToString(@enumFromInt(best_move.from));
             const to = types.SquareString.getSquareToString(@enumFromInt(best_move.to));
 

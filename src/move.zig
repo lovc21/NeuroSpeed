@@ -1,6 +1,7 @@
 const types = @import("types.zig");
 const eval = @import("evaluation.zig");
 const zobrist = @import("zobrist.zig");
+const nnue = @import("nnue.zig");
 
 // Define a move (packed 16-bit: 6+6+4 bits for cache-friendly MoveList)
 pub const Move = packed struct {
@@ -440,6 +441,44 @@ pub inline fn make_move_search(board: *types.Board, move: Move) SearchUndo {
     // Flip side
     board.side = if (board.side == types.Color.White) types.Color.Black else types.Color.White;
 
+    // Incremental NNUE accumulator push (search path only; gated by acc_active).
+    // undo.captured is final here (EN_PASSANT replaced it with the taken pawn).
+    // `board` is the POST-move position, so nnue.apply reads the new king files.
+    if (nnue.acc_active) {
+        var d = nnue.FeatDelta{};
+        if (flags == types.MoveFlags.OO or flags == types.MoveFlags.OOO) {
+            // King from->to plus rook: OO rook h->f (to+1 -> to-1), OOO rook a->d (to-2 -> to+1).
+            const rook_piece: types.Piece = if (moving_white) types.Piece.WHITE_ROOK else types.Piece.BLACK_ROOK;
+            const r_idx: usize = @intFromEnum(rook_piece);
+            const oo = flags == types.MoveFlags.OO;
+            const rf: u6 = if (oo) to + 1 else to - 2;
+            const rt: u6 = if (oo) to - 1 else to + 1;
+            d.add(piece_idx, to);
+            d.add(r_idx, rt);
+            d.sub(piece_idx, from);
+            d.sub(r_idx, rf);
+        } else if (is_promotion_move(flags)) {
+            const side: types.Color = if (moving_white) types.Color.White else types.Color.Black;
+            const promoted_idx: usize = @intFromEnum(get_promoted_piece(flags, side));
+            d.add(promoted_idx, to);
+            d.sub(piece_idx, from);
+            if (undo.captured != types.Piece.NO_PIECE) d.sub(@intFromEnum(undo.captured), to);
+        } else if (flags == types.MoveFlags.EN_PASSANT) {
+            const captured_sq: u6 = if (moving_white) to -% 8 else to +% 8;
+            d.add(piece_idx, to);
+            d.sub(piece_idx, from);
+            d.sub(@intFromEnum(undo.captured), captured_sq);
+        } else if (undo.captured != types.Piece.NO_PIECE) {
+            d.add(piece_idx, to);
+            d.sub(piece_idx, from);
+            d.sub(@intFromEnum(undo.captured), to);
+        } else {
+            d.add(piece_idx, to);
+            d.sub(piece_idx, from);
+        }
+        nnue.apply(board, d);
+    }
+
     return undo;
 }
 
@@ -449,6 +488,11 @@ pub inline fn unmake_move_search(board: *types.Board, move: Move, undo: SearchUn
     const from = move.from;
     const to = move.to;
     const flags = move.flags;
+
+    // Pop the incremental NNUE accumulator pushed by make_move_search.
+    if (nnue.acc_active) {
+        nnue.pop_acc();
+    }
 
     // Flip side back
     board.side = if (board.side == types.Color.White) types.Color.Black else types.Color.White;

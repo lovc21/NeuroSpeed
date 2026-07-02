@@ -22,6 +22,7 @@ pub const UCI = struct {
     is_searching: bool,
     stop_search: bool,
     search_thread: ?std.Thread,
+    move_overhead: u64 = 10, // ms subtracted per move for GUI/process latency
 
     // new uci
     pub fn new(allocator: std.mem.Allocator) UCI {
@@ -217,7 +218,7 @@ pub const UCI = struct {
 
             if (my_time) |time| {
                 const inc = my_inc orelse 0;
-                const overhead: u64 = 10;
+                const overhead: u64 = self.move_overhead;
                 const mtg: u64 = if (movestogo) |m| @min(m, 50) else 50;
 
                 // Adjust remaining time by expected increment value (Lambergar-style)
@@ -236,10 +237,11 @@ pub const UCI = struct {
                     soft_limit = @min(adj_time / 30, time / 5);
                 }
 
-                // Hard limit: min(5*soft, 80% of remaining)
-                hard_limit = @min(soft_limit * 5, time * 4 / 5);
+                // Hard limit: min(2.5*soft, 80% of remaining). Bullet can't
+                // afford the old 5x overshoots on a single move.
+                hard_limit = @min(soft_limit * 5 / 2, time * 4 / 5);
 
-                // Safety buffer: always leave at least 10ms
+                // Safety buffer: always leave the overhead in reserve
                 if (time > overhead) {
                     hard_limit = @min(hard_limit, time - overhead);
                     soft_limit = @min(soft_limit, time - overhead);
@@ -248,9 +250,11 @@ pub const UCI = struct {
                     soft_limit = 1;
                 }
 
-                // Minimum limits
-                soft_limit = @max(soft_limit, 5);
-                hard_limit = @max(hard_limit, 5);
+                // Minimum limits — never above what's actually on the clock
+                // (the old flat 5ms floor could overcommit a near-empty clock).
+                const floor: u64 = @min(5, @max(time / 4, 1));
+                soft_limit = @max(soft_limit, floor);
+                hard_limit = @max(hard_limit, floor);
             }
         }
 
@@ -364,32 +368,69 @@ pub const UCI = struct {
     }
 
     fn parse_setoption(self: *UCI, command: []const u8) void {
-        // Format: setoption name <name> value <value>
-        _ = self;
+        // Format: setoption name <name...> value <value>  (names may contain spaces)
         var tokens = std.mem.tokenizeScalar(u8, command, ' ');
         _ = tokens.next(); // "setoption"
 
         const name_kw = tokens.next() orelse return;
         if (!std.mem.eql(u8, name_kw, "name")) return;
 
-        const name = tokens.next() orelse return;
-
-        const value_kw = tokens.next() orelse return;
-        if (!std.mem.eql(u8, value_kw, "value")) return;
-
-        const value_str = tokens.next() orelse return;
+        // Collect name tokens until the "value" keyword (e.g. "Move Overhead").
+        var name_buf: [64]u8 = undefined;
+        var name_len: usize = 0;
+        var value_str: ?[]const u8 = null;
+        while (tokens.next()) |tok| {
+            if (std.mem.eql(u8, tok, "value")) {
+                value_str = tokens.next();
+                break;
+            }
+            if (name_len > 0 and name_len < name_buf.len) {
+                name_buf[name_len] = ' ';
+                name_len += 1;
+            }
+            const n = @min(tok.len, name_buf.len - name_len);
+            @memcpy(name_buf[name_len..][0..n], tok[0..n]);
+            name_len += n;
+        }
+        const name = name_buf[0..name_len];
+        const value = value_str orelse return;
 
         if (std.mem.eql(u8, name, "Hash")) {
-            const size_mb = std.fmt.parseUnsigned(usize, value_str, 10) catch return;
+            const size_mb = std.fmt.parseUnsigned(usize, value, 10) catch return;
             const clamped = @max(1, @min(size_mb, 4096));
             search.init_tt(std.heap.page_allocator, clamped);
             print("info string Hash set to {} MB\n", .{clamped});
         }
 
         if (std.mem.eql(u8, name, "UseNNUE")) {
-            const want = std.ascii.eqlIgnoreCase(value_str, "true");
+            const want = std.ascii.eqlIgnoreCase(value, "true");
             nnue.use_nnue = want and nnue.loaded();
             print("info string UseNNUE set to {}\n", .{nnue.use_nnue});
+        }
+
+        if (std.mem.eql(u8, name, "Move Overhead")) {
+            const ms = std.fmt.parseUnsigned(u64, value, 10) catch return;
+            self.move_overhead = @min(ms, 1000);
+            print("info string Move Overhead set to {} ms\n", .{self.move_overhead});
+        }
+
+        // Eval shaping: 50-move damping divisor (0 = off). Kept in nnue, not
+        // search.Params, to avoid a search<->nnue import cycle.
+        if (std.mem.eql(u8, name, "r50_div")) {
+            const v = std.fmt.parseInt(i32, value, 10) catch return;
+            nnue.r50_div = @max(0, @min(v, 1024));
+            print("info string r50_div set to {}\n", .{nnue.r50_div});
+        }
+
+        // Tunable search parameters (SPSA): every search.Params field is a
+        // UCI spin option with the same name.
+        inline for (std.meta.fields(search.Params)) |f| {
+            if (std.mem.eql(u8, name, f.name)) {
+                const v = std.fmt.parseInt(i32, value, 10) catch return;
+                @field(search.params, f.name) = v;
+                search.rebuild_tables();
+                print("info string {s} set to {}\n", .{ f.name, v });
+            }
         }
     }
 
@@ -428,6 +469,11 @@ pub const UCI = struct {
                     try stdout.print("option name Hash type spin default 64 min 1 max 4096\n", .{});
                     try stdout.print("option name Threads type spin default 1 min 1 max 1\n", .{});
                     try stdout.print("option name UseNNUE type check default true\n", .{});
+                    try stdout.print("option name Move Overhead type spin default 10 min 0 max 1000\n", .{});
+                    try stdout.print("option name r50_div type spin default 0 min 0 max 1024\n", .{});
+                    inline for (std.meta.fields(search.Params)) |f| {
+                        try stdout.print("option name {s} type spin default {} min -1000000 max 1000000\n", .{ f.name, @field(search.params, f.name) });
+                    }
                     try stdout.print("uciok\n", .{});
                 } else if (std.mem.eql(u8, command, "isready")) {
                     try stdout.print("readyok\n", .{});
