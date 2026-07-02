@@ -11,11 +11,15 @@ pub const TTFlag = enum(u2) {
     UPPER = 3, // Fail-low — score is an upper bound
 };
 
-// TT Entry: 16 bytes (2 entries per cache line)
+/// Sentinel for "no static eval stored" (in-check nodes).
+pub const NO_EVAL: i16 = std.math.minInt(i16);
+
+// TT Entry: 16 bytes (4 entries per cache line)
 pub const TTEntry = struct {
     key: u32 = 0,
     best_move: Move = Move.empty(),
     score: i16 = 0,
+    static_eval: i16 = NO_EVAL,
     depth: u8 = 0,
     flag: TTFlag = .NONE,
     age: u8 = 0,
@@ -88,20 +92,36 @@ pub const TT = struct {
         score: i32,
         flag: TTFlag,
         best_move: Move,
+        static_eval: i16,
     ) void {
         const idx = self.index(hash);
         const entry = &self.entries[idx];
         const vkey = verification_key(hash);
 
-        // Replacement policy: replace if
-        // 1. Empty slot
-        // 2. Same position (update with potentially deeper/better info)
-        // 3. Old age (from previous search)
-        // 4. Shallower depth
-        if (entry.flag == .NONE or
-            entry.key == vkey or
-            entry.age != self.age or
-            entry.depth <= depth)
+        // Replacement policy (depth-preferred with aging). The old rule
+        // "age != current -> always replace" let depth-0 qsearch stores wipe
+        // the previous move's deep entries — in real games the TT carries
+        // over between moves and that carried depth is most of its value.
+        const same_key = entry.key == vkey and entry.flag != .NONE;
+        const age_dist: i32 = @intCast(self.age -% entry.age);
+        const replace = if (entry.flag == .NONE)
+            true
+        else if (same_key)
+            // Same position: refresh freely (newest bounds win) EXCEPT when a
+            // shallow store would wipe much deeper data — the qsearch depth-0
+            // spam case that motivated this policy.
+            @as(i32, depth) + 8 >= @as(i32, entry.depth)
+        else
+            // Collision: older entries get progressively easier to evict;
+            // same-age requires comparable depth.
+            @as(i32, depth) + 4 * @min(age_dist, 4) >= @as(i32, entry.depth);
+
+        if (!replace) {
+            // Still-useful same-position entry: mark it current so collisions
+            // don't age it out while it keeps serving this search.
+            if (same_key) entry.age = self.age;
+            return;
+        }
         {
             // Clamp score to i16 range
             const clamped_score: i16 = if (score > std.math.maxInt(i16))
@@ -115,6 +135,7 @@ pub const TT = struct {
                 .key = vkey,
                 .depth = depth,
                 .score = clamped_score,
+                .static_eval = static_eval,
                 .flag = flag,
                 .best_move = best_move,
                 .age = self.age,

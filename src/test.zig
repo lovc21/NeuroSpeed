@@ -791,17 +791,21 @@ fn nnue_fill_net(buf: []u8) void {
     }
 }
 
-test "nnue feature_index matches bullet Chess768 encoding" {
-    // White pawn (ord 0) on a1 (sq 0): friendly, no flip -> 0
-    try std.testing.expectEqual(@as(usize, 0), nnue.feature_index(true, 0, 0));
+test "nnue feature_index matches bullet Chess768 encoding (mirror=false)" {
+    // White pawn (ord 0) on a1 (sq 0): friendly, no flip, bucket 0 -> 0
+    try std.testing.expectEqual(@as(usize, 0), nnue.feature_index(true, 0, 0, false, 0));
     // ...from black's perspective: enemy + rank-flip -> 384 + 0 + (0^56)
-    try std.testing.expectEqual(@as(usize, 440), nnue.feature_index(false, 0, 0));
+    try std.testing.expectEqual(@as(usize, 440), nnue.feature_index(false, 0, 0, false, 0));
     // White king (ord 5) on e1 (sq 4), white perspective -> 5*64 + 4
-    try std.testing.expectEqual(@as(usize, 324), nnue.feature_index(true, 5, 4));
+    try std.testing.expectEqual(@as(usize, 324), nnue.feature_index(true, 5, 4, false, 0));
     // Black king (ord 13) on h8 (sq 63), white perspective -> 384 + 5*64 + 63
-    try std.testing.expectEqual(@as(usize, 767), nnue.feature_index(true, 13, 63));
+    try std.testing.expectEqual(@as(usize, 767), nnue.feature_index(true, 13, 63, false, 0));
     // ...black perspective -> 0 + 5*64 + (63^56)
-    try std.testing.expectEqual(@as(usize, 327), nnue.feature_index(false, 13, 63));
+    try std.testing.expectEqual(@as(usize, 327), nnue.feature_index(false, 13, 63, false, 0));
+    // mirror=true flips the file: white pawn a1 -> file h -> 0^7 = 7
+    try std.testing.expectEqual(@as(usize, 7), nnue.feature_index(true, 0, 0, true, 0));
+    // bucket offset: bucket 2 adds 768*2 = 1536
+    try std.testing.expectEqual(@as(usize, 1536), nnue.feature_index(true, 0, 0, false, 2));
 }
 
 test "nnue evaluate is mirror-symmetric (encoding + eval are correct)" {

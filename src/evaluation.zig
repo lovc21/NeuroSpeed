@@ -401,7 +401,7 @@ pub const Evaluator = struct {
 
     pub fn eval(self: Evaluator, board: *const types.Board, comptime color: types.Color, alpha: i32, beta: i32) i32 {
         if (nnue.use_nnue) {
-            return nnue.evaluate(board);
+            return nnue.evaluate_search(board);
         } else {
             return self.hce_eval(board, color, alpha, beta);
         }
@@ -1406,11 +1406,19 @@ pub const Evaluator = struct {
         // Evaluate pawn shelter for white king
         const white_king_file: u6 = @intCast(white_king_square % 8);
         var white_shelter_penalty: i32 = 0;
+        // Squares at least one rank above the king. king_square+8 can reach 64+
+        // for a king on rank 8 — shifting by that is UB, so guard it (no squares
+        // above the board = empty mask = no shelter, which is also correct).
+        const white_shelter_from: u7 = @as(u7, @intCast(white_king_square)) + 8;
+        const white_above_mask: u64 = if (white_shelter_from >= 64)
+            0
+        else
+            ~((@as(u64, 1) << @intCast(white_shelter_from)) - 1);
         for (0..3) |i| {
             const check_file: i6 = @as(i6, @intCast(white_king_file)) + @as(i6, @intCast(i)) - 1;
             if (check_file >= 0 and check_file < 8) {
                 const file_mask = types.mask_file[@intCast(check_file)];
-                const pawns_in_front = white_pawns & file_mask & ~((@as(u64, 1) << @intCast(white_king_square + 8)) - 1);
+                const pawns_in_front = white_pawns & file_mask & white_above_mask;
                 if (pawns_in_front == 0) {
                     white_shelter_penalty += 20;
                 }
