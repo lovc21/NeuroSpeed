@@ -76,6 +76,13 @@ pub const TT = struct {
         return @truncate(hash >> 32);
     }
 
+    /// Prefetch the entry for `hash` (issued right after make_move so the
+    /// line is in-cache by the time the child node probes). Semantically a
+    /// no-op — bit-identical search.
+    pub inline fn prefetch(self: *const TT, hash: u64) void {
+        @prefetch(&self.entries[self.index(hash)], .{});
+    }
+
     pub fn probe(self: *const TT, hash: u64) ?*const TTEntry {
         const idx = self.index(hash);
         const entry = &self.entries[idx];
