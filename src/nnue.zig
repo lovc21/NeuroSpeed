@@ -158,6 +158,71 @@ comptime {
     std.debug.assert((2 * PW) % (2 * VL32) == 0);
 }
 
+const builtin = @import("builtin");
+const HAS_VNNI512 = builtin.cpu.arch == .x86_64 and
+    builtin.cpu.has(.x86, .avx512vnni) and VL32 >= 16;
+
+const N_CHUNKS: usize = 2 * PW / 4; // 256 4-byte activation chunks
+
+/// Sparse L1 weight layout: for chunk c, 64 contiguous bytes hold
+/// out j (0..15) x in k (0..3): sparse[b][c*64 + j*4 + k] = w[out j][c*4 + k].
+var l1_weights_sparse: [OUTPUT_BUCKETS][N_CHUNKS * 64]i8 align(64) = undefined;
+
+fn build_sparse_l1() void {
+    for (0..OUTPUT_BUCKETS) |b| {
+        for (0..N_CHUNKS) |c| {
+            for (0..L1_OUT) |j| {
+                for (0..4) |k| {
+                    l1_weights_sparse[b][c * 64 + j * 4 + k] = l1_weights[b * L1_OUT + j][c * 4 + k];
+                }
+            }
+        }
+    }
+}
+
+/// AVX512-VNNI u8 x i8 dot-accumulate: sum[j] += sum_k(u[4j+k] * w[4j+k]),
+/// products summed in full i32 precision (exact, unlike vpdpbusds/pmaddubsw).
+fn dpbusd512(sum: @Vector(16, i32), u: @Vector(64, u8), w: @Vector(64, i8)) @Vector(16, i32) {
+    return @extern(*const fn (@Vector(16, i32), @Vector(16, i32), @Vector(16, i32)) callconv(.c) @Vector(16, i32), .{
+        .name = "llvm.x86.avx512.vpdpbusd.512",
+    }).*(sum, @bitCast(u), @bitCast(w));
+}
+
+// Lookup: bitmask byte -> up to 8 set-bit positions
+const NONZERO_INDICES: [256]@Vector(8, u16) = blk: {
+    var res: [256]@Vector(8, u16) = @splat(@splat(0));
+    @setEvalBranchQuota(256 * 8 * 2);
+    for (0..256) |i| {
+        var count: usize = 0;
+        for (0..8) |j| {
+            if (i & (1 << j) != 0) {
+                res[i][count] = j;
+                count += 1;
+            }
+        }
+    }
+    break :blk res;
+};
+
+/// Collect indices of nonzero 4-byte chunks of the activation vector.
+fn find_nonzero_chunks(x8: *align(64) const [2 * PW]u8, indices: *[N_CHUNKS]u16) usize {
+    var count: usize = 0;
+    var base: @Vector(8, u16) = @splat(0);
+    var i: usize = 0;
+    while (i < 2 * PW) : (i += 64) {
+        const v: @Vector(16, i32) = @bitCast(@as(@Vector(64, u8), x8[i..][0..64].*));
+        const mask: u16 = @bitCast(v != @as(@Vector(16, i32), @splat(0)));
+        inline for (0..2) |j| {
+            const byte: usize = (mask >> (8 * j)) & 0xff;
+            const idxs: [8]u16 = NONZERO_INDICES[byte] + base;
+            @memcpy(indices[count..][0..8], &idxs);
+            count += @popCount(byte);
+            base += @splat(8);
+        }
+    }
+    return count;
+}
+
 inline fn add_col(v: *[HIDDEN]i16, col: *const [HIDDEN]i16) void {
     var i: usize = 0;
     while (i < HIDDEN) : (i += VL16) {
@@ -282,39 +347,61 @@ pub fn apply(board: *const Board, delta: FeatDelta) void {
     const src = &acc_stack[acc_sp];
     acc_sp += 1;
     const dst = &acc_stack[acc_sp];
+
+    // Phase 1: resolve mirror/bucket + column pointers for BOTH perspectives
+    // and prefetch every column up front — feature_weights is ~1 MB (bigger
+    // than L2), so columns often sit in L3; perspective 0's fused pass gives
+    // perspective 1's prefetches time to land. Semantically a no-op.
+    var need_refresh: [2]bool = undefined;
+    var mir: [2]bool = undefined;
+    var buck: [2]usize = undefined;
+    var subs: [2][2]*const [HIDDEN]i16 = undefined;
+    var adds: [2][2]*const [HIDDEN]i16 = undefined;
     inline for ([_]bool{ true, false }) |pw| {
         const ci: usize = if (pw) 0 else 1;
         const m = king_mirror(board, pw);
         const b = king_bucket(board, pw);
-        if (m != src.mirror[ci] or b != src.bucket[ci]) {
-            // This perspective's own king changed mirror or bucket → remap all.
-            refresh_one(dst, board, pw, m, b);
-        } else {
-            dst.mirror[ci] = m;
-            dst.bucket[ci] = b;
-            var subs: [2]*const [HIDDEN]i16 = undefined;
-            var adds: [2]*const [HIDDEN]i16 = undefined;
+        mir[ci] = m;
+        buck[ci] = b;
+        // King changed mirror or bucket → every feature remaps → full refresh.
+        need_refresh[ci] = (m != src.mirror[ci] or b != src.bucket[ci]);
+        if (!need_refresh[ci]) {
             var k: usize = 0;
             while (k < delta.n_sub) : (k += 1) {
-                subs[k] = &feature_weights[feature_index(pw, delta.sub_pc[k], delta.sub_sq[k], m, b)];
+                const col = &feature_weights[feature_index(pw, delta.sub_pc[k], delta.sub_sq[k], m, b)];
+                subs[ci][k] = col;
+                @prefetch(col, .{ .rw = .read });
             }
             k = 0;
             while (k < delta.n_add) : (k += 1) {
-                adds[k] = &feature_weights[feature_index(pw, delta.add_pc[k], delta.add_sq[k], m, b)];
+                const col = &feature_weights[feature_index(pw, delta.add_pc[k], delta.add_sq[k], m, b)];
+                adds[ci][k] = col;
+                @prefetch(col, .{ .rw = .read });
             }
+        }
+    }
+
+    // Phase 2: execute.
+    inline for ([_]bool{ true, false }) |pw| {
+        const ci: usize = if (pw) 0 else 1;
+        if (need_refresh[ci]) {
+            refresh_one(dst, board, pw, mir[ci], buck[ci]);
+        } else {
+            dst.mirror[ci] = mir[ci];
+            dst.bucket[ci] = buck[ci];
             const dv = &dst.vals[ci];
             const sv = &src.vals[ci];
             if (delta.n_add == 1) {
                 if (delta.n_sub == 1) {
-                    apply_fused(dv, sv, .{subs[0]}, .{adds[0]}); // quiet
+                    apply_fused(dv, sv, .{subs[ci][0]}, .{adds[ci][0]}); // quiet
                 } else {
-                    apply_fused(dv, sv, .{ subs[0], subs[1] }, .{adds[0]}); // capture / ep
+                    apply_fused(dv, sv, .{ subs[ci][0], subs[ci][1] }, .{adds[ci][0]}); // capture / ep
                 }
             } else {
                 if (delta.n_sub == 1) {
-                    apply_fused(dv, sv, .{subs[0]}, .{ adds[0], adds[1] });
+                    apply_fused(dv, sv, .{subs[ci][0]}, .{ adds[ci][0], adds[ci][1] });
                 } else {
-                    apply_fused(dv, sv, .{ subs[0], subs[1] }, .{ adds[0], adds[1] }); // castling
+                    apply_fused(dv, sv, .{ subs[ci][0], subs[ci][1] }, .{ adds[ci][0], adds[ci][1] }); // castling
                 }
             }
         }
@@ -417,7 +504,7 @@ pub fn evaluate_acc(acc: *const Accumulator, stm: Color, bucket: usize) i32 {
     const them: usize = us ^ 1;
 
     // CReLU + pairwise-mul to 8-bit: x8[j] = (clamp(acc[j])*clamp(acc[j+PW]))>>8.
-    var x8: [2 * PW]u8 = undefined;
+    var x8: [2 * PW]u8 align(64) = undefined;
     const PVL = 16;
     const z: @Vector(PVL, i16) = @splat(0);
     const q: @Vector(PVL, i16) = @splat(@as(i16, QA));
@@ -438,9 +525,35 @@ pub fn evaluate_acc(acc: *const Accumulator, stm: Color, bucket: usize) i32 {
     // L1 (i8) -> dequant + bias -> SCReLU (16).
     var h2: [L1_OUT]f32 = undefined;
     const l1b = bucket * L1_OUT;
-    for (0..L1_OUT) |k| {
-        const s = dot_u8i8(&x8, &l1_weights[l1b + k]);
-        h2[k] = screlu_f(@as(f32, @floatFromInt(s)) / L1_DEQUANT + l1_bias[l1b + k]);
+    if (comptime HAS_VNNI512) {
+        // Sparse path: one vpdpbusd per nonzero activation chunk computes all
+        // 16 outputs; two accumulator chains hide the dpbusd latency.
+        var idxs: [N_CHUNKS]u16 = undefined;
+        const nnz = find_nonzero_chunks(&x8, &idxs);
+        const x32: [*]const i32 = @ptrCast(@alignCast(&x8));
+        const wsp: [*]const i8 = &l1_weights_sparse[bucket];
+        var acc0: @Vector(16, i32) = @splat(0);
+        var acc1: @Vector(16, i32) = @splat(0);
+        var t: usize = 0;
+        while (t + 2 <= nnz) : (t += 2) {
+            const c0: usize = idxs[t];
+            const c1: usize = idxs[t + 1];
+            acc0 = dpbusd512(acc0, @bitCast(@as(@Vector(16, i32), @splat(x32[c0]))), wsp[c0 * 64 ..][0..64].*);
+            acc1 = dpbusd512(acc1, @bitCast(@as(@Vector(16, i32), @splat(x32[c1]))), wsp[c1 * 64 ..][0..64].*);
+        }
+        if (t < nnz) {
+            const c0: usize = idxs[t];
+            acc0 = dpbusd512(acc0, @bitCast(@as(@Vector(16, i32), @splat(x32[c0]))), wsp[c0 * 64 ..][0..64].*);
+        }
+        const sums: [L1_OUT]i32 = acc0 + acc1;
+        for (0..L1_OUT) |k| {
+            h2[k] = screlu_f(@as(f32, @floatFromInt(sums[k])) / L1_DEQUANT + l1_bias[l1b + k]);
+        }
+    } else {
+        for (0..L1_OUT) |k| {
+            const s = dot_u8i8(&x8, &l1_weights[l1b + k]);
+            h2[k] = screlu_f(@as(f32, @floatFromInt(s)) / L1_DEQUANT + l1_bias[l1b + k]);
+        }
     }
     // L2 (f32) -> SCReLU (32).
     var h3: [L2_OUT]f32 = undefined;
@@ -496,6 +609,7 @@ pub fn load_bytes(data: []const u8) !void {
             off += 1;
         }
     }
+    build_sparse_l1();
     for (0..OUTPUT_BUCKETS * L1_OUT) |o| {
         l1_bias[o] = read_f32(data, off);
         off += 4;

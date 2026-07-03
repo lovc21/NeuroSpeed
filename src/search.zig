@@ -510,6 +510,9 @@ pub const Search = struct {
             // Legal movegen guarantees all moves are legal
             const undo = move_gen.make_move_search(board, move);
 
+            // Hide the child's TT-probe cache miss behind its entry work.
+            if (global_tt) |*tt| tt.prefetch(board.hash);
+
             const score = -self.quiescence(board, -adj_beta, -alpha, depth - 1, opponent);
 
             self.ply -= 1;
@@ -898,6 +901,9 @@ pub const Search = struct {
             // Legal movegen guarantees all moves are legal
             const undo = move_gen.make_move_search(board, move);
             legal_moves += 1;
+
+            // Hide the child's TT-probe cache miss behind its entry work.
+            if (global_tt) |*tt| tt.prefetch(board.hash);
 
             // Compute gives_check once for all pruning decisions and the check extension
             const gives_check = self.is_king_in_check(board, opponent);
