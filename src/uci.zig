@@ -10,6 +10,7 @@ const search = @import("search.zig");
 const lists = @import("lists.zig");
 const eval = @import("evaluation.zig");
 const nnue = @import("nnue.zig");
+const globals = @import("globals.zig");
 
 const UCI_COMMANDS_MAX: usize = 10000;
 const VERSION: []const u8 = "0.1";
@@ -21,7 +22,6 @@ pub const UCI = struct {
     allocator: std.mem.Allocator,
     is_searching: bool,
     stop_search: bool,
-    search_thread: ?std.Thread,
     move_overhead: u64 = 10, // ms subtracted per move for GUI/process latency
 
     // new uci
@@ -38,7 +38,6 @@ pub const UCI = struct {
             .allocator = allocator,
             .is_searching = false,
             .stop_search = false,
-            .search_thread = null,
         };
     }
 
@@ -261,7 +260,7 @@ pub const UCI = struct {
         searchWrapper(self, depth, soft_limit, hard_limit);
     }
 
-    fn run_bench(self: *UCI, stdout: anytype) !void {
+    fn run_bench(self: *UCI, stdout: *std.Io.Writer) !void {
         const bench_positions = [_][]const u8{
             "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
             "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
@@ -271,7 +270,7 @@ pub const UCI = struct {
         };
 
         var total_nodes: u64 = 0;
-        var timer = std.time.Timer.start() catch unreachable;
+        var timer: globals.Timer = .start();
 
         for (bench_positions) |fen| {
             try bitboard.parse_fen(fen, &self.board);
@@ -301,7 +300,7 @@ pub const UCI = struct {
     //   1. move generator  -> perft to `depth`, pure movegen (no zobrist/eval)
     //   2. evaluation       -> repeated static-eval calls, calls per second
     //   3. full search      -> search to `depth`, nodes per second of the whole engine
-    fn run_speedbench(self: *UCI, depth: u8, stdout: anytype) !void {
+    fn run_speedbench(self: *UCI, depth: u8, stdout: *std.Io.Writer) !void {
         const eval_iters: u64 = 20_000_000;
 
         try stdout.print("\n=== SPEED BENCHMARK (6 standardnih pozicij, globina {d}) ===\n", .{depth});
@@ -317,7 +316,7 @@ pub const UCI = struct {
             // --- 1. Move generator (perft, fast play/undo, no eval/zobrist) ---
             try bitboard.parse_fen(fen, &self.board);
             const white = self.board.side == types.Color.White;
-            var t1 = std.time.Timer.start() catch unreachable;
+            var t1: globals.Timer = .start();
             const perft_nodes: u64 = if (white)
                 util.perft_legal(types.Color.White, &self.board, depth)
             else
@@ -327,7 +326,7 @@ pub const UCI = struct {
 
             // --- 2. Evaluation function (repeated static-eval calls) ---
             var sink: i64 = 0;
-            var t2 = std.time.Timer.start() catch unreachable;
+            var t2: globals.Timer = .start();
             var i: u64 = 0;
             while (i < eval_iters) : (i += 1) {
                 const s = if (white)
@@ -344,7 +343,7 @@ pub const UCI = struct {
             try bitboard.parse_fen(fen, &self.board); // restore clean state for search
             search.init_search();
             if (search.global_tt) |*tt| tt.clear();
-            var t3 = std.time.Timer.start() catch unreachable;
+            var t3: globals.Timer = .start();
             if (white)
                 search.search_position(&self.board, depth, 0, 0, types.Color.White)
             else
@@ -443,17 +442,26 @@ pub const UCI = struct {
     }
     // main loop
     pub fn uci_loop(self: *UCI) !void {
-        var stdin = std.io.getStdIn().reader();
-        var stdout = std.io.getStdOut().writer();
+        const io = globals.io;
+
+        var stdin_buf: [UCI_COMMANDS_MAX]u8 = undefined;
+        var stdin_fr = std.Io.File.stdin().readerStreaming(io, &stdin_buf);
+        const stdin = &stdin_fr.interface;
+
+        var stdout_buf: [4096]u8 = undefined;
+        var stdout_fw = std.Io.File.stdout().writerStreaming(io, &stdout_buf);
+        const stdout = &stdout_fw.interface;
 
         try stdout.print("NeuroSpeed version {s}\n", .{VERSION});
-
-        const buffer = try self.allocator.alloc(u8, UCI_COMMANDS_MAX);
-        defer self.allocator.free(buffer);
+        try stdout.flush();
 
         while (true) {
-            if (stdin.readUntilDelimiterOrEof(buffer, '\n')) |maybe_line| {
-                const line = maybe_line orelse break;
+            {
+                const maybe_line = stdin.takeDelimiter('\n') catch |err| {
+                    print("Error reading input: {}\n", .{err});
+                    break;
+                };
+                const line = maybe_line orelse break; // clean EOF
                 const trimmed = std.mem.trim(u8, line, " \r\n\t");
 
                 if (trimmed.len == 0) continue;
@@ -486,10 +494,6 @@ pub const UCI = struct {
                         tt.clear();
                     }
                     self.stop_search = true;
-                    if (self.search_thread) |thread| {
-                        thread.join();
-                        self.search_thread = null;
-                    }
                 } else if (std.mem.eql(u8, command, "setoption")) {
                     self.parse_setoption(trimmed);
                 } else if (std.mem.eql(u8, command, "position")) {
@@ -509,7 +513,7 @@ pub const UCI = struct {
                         depth = std.fmt.parseUnsigned(u8, depth_str, 10) catch 1;
                     }
 
-                    var timer = std.time.Timer.start() catch unreachable;
+                    var timer: globals.Timer = .start();
                     const nodes: u64 = if (self.board.side == types.Color.White)
                         util.perft_legal(types.Color.White, &self.board, depth)
                     else
@@ -527,7 +531,7 @@ pub const UCI = struct {
                     }
                     const white = self.board.side == types.Color.White;
                     var sink: i64 = 0;
-                    var timer = std.time.Timer.start() catch unreachable;
+                    var timer: globals.Timer = .start();
                     var i: u64 = 0;
                     while (i < iters) : (i += 1) {
                         const s = if (white)
@@ -556,17 +560,13 @@ pub const UCI = struct {
                 } else {
                     try stdout.print("Unknown command: {s}\n", .{command});
                 }
-            } else |err| {
-                print("Error reading input: {}\n", .{err});
-                break;
             }
+
+            // Deliver everything before blocking on the next read — a buffered
+            // uciok/readyok while waiting on stdin deadlocks GUIs.
+            stdout.flush() catch {};
         }
 
-        // Clean up
-        if (self.search_thread) |thread| {
-            self.stop_search = true;
-            thread.join();
-        }
         search.deinit_tt();
     }
 };

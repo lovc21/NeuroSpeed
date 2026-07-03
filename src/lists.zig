@@ -20,4 +20,3 @@ pub const ScoreList = struct {
         self.count += 1;
     }
 };
-

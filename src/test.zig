@@ -11,6 +11,7 @@ const lists = @import("lists.zig");
 const zobrist = @import("zobrist.zig");
 const nnue = @import("nnue.zig");
 const datagen = @import("datagen.zig");
+const globals = @import("globals.zig");
 const print = std.debug.print;
 const expect = std.testing.expect;
 
@@ -635,7 +636,7 @@ test "Zobrist hash consistency after moves" {
 fn run_perft_legal_bench(fen: []const u8, name: []const u8, depth: u8, expected: u64) !void {
     var board = types.Board.new();
     try bitboard.parse_fen(fen, &board);
-    var timer = std.time.Timer.start() catch unreachable;
+    var timer: globals.Timer = .start();
     const nodes: u64 = if (board.side == types.Color.White)
         util.perft_legal(types.Color.White, &board, depth)
     else
@@ -682,7 +683,7 @@ fn bench_eval_one(fen: []const u8, name: []const u8, iters: u64) !void {
     var board = types.Board.new();
     try bitboard.parse_fen(fen, &board); // also sets up global_evaluator (material+phase)
     var sink: i64 = 0;
-    var timer = std.time.Timer.start() catch unreachable;
+    var timer: globals.Timer = .start();
     var i: u64 = 0;
     while (i < iters) : (i += 1) {
         const s = if (board.side == types.Color.White)
@@ -712,7 +713,7 @@ test "MoveGen speed benchmark" {
     for (types.standard_perft_positions, types.standard_perft_names) |fen, name| {
         var board = types.Board.new();
         try bitboard.parse_fen(fen, &board);
-        var timer = std.time.Timer.start() catch unreachable;
+        var timer: globals.Timer = .start();
         const nodes: u64 = if (board.side == types.Color.White)
             util.perft_legal(types.Color.White, &board, 6)
         else

@@ -1,5 +1,6 @@
 const std = @import("std");
 const types = @import("types.zig");
+const globals = @import("globals.zig");
 
 const Board = types.Board;
 const Color = types.Color;
@@ -72,13 +73,13 @@ var net_loaded: bool = false;
 /// architecture (the file itself is padded up to a multiple of 64 bytes).
 pub const NET_BYTES: usize =
     INPUT * HIDDEN * @sizeOf(i16) // l0w
-+ HIDDEN * @sizeOf(i16) // l0b
-+ (2 * PW) * (OUTPUT_BUCKETS * L1_OUT) * @sizeOf(i8) // l1w (i8)
-+ (OUTPUT_BUCKETS * L1_OUT) * @sizeOf(f32) // l1b (f32)
-+ L1_OUT * (OUTPUT_BUCKETS * L2_OUT) * @sizeOf(f32) // l2w (f32)
-+ (OUTPUT_BUCKETS * L2_OUT) * @sizeOf(f32) // l2b (f32)
-+ L2_OUT * OUTPUT_BUCKETS * @sizeOf(f32) // l3w (f32)
-+ OUTPUT_BUCKETS * @sizeOf(f32); // l3b (f32)
+    + HIDDEN * @sizeOf(i16) // l0b
+    + (2 * PW) * (OUTPUT_BUCKETS * L1_OUT) * @sizeOf(i8) // l1w (i8)
+    + (OUTPUT_BUCKETS * L1_OUT) * @sizeOf(f32) // l1b (f32)
+    + L1_OUT * (OUTPUT_BUCKETS * L2_OUT) * @sizeOf(f32) // l2w (f32)
+    + (OUTPUT_BUCKETS * L2_OUT) * @sizeOf(f32) // l2b (f32)
+    + L2_OUT * OUTPUT_BUCKETS * @sizeOf(f32) // l3w (f32)
+    + OUTPUT_BUCKETS * @sizeOf(f32); // l3b (f32)
 
 pub fn loaded() bool {
     return net_loaded;
@@ -142,6 +143,60 @@ pub const Accumulator = struct {
     }
 };
 
+// ===========================================================================
+// Explicit SIMD kernels. Zig 0.16's LLVM disables the loop auto-vectorizer
+// (miscompilation workaround), so every hot loop must carry its own @Vector
+// code. Zen 5 native: 512-bit → VL16=32, VL32=16; baseline x86_64 (SSE2):
+// VL16=8, VL32=4. HIDDEN=640 and 2*PW=1024 are divisible by all of these.
+// All integer kernels are bit-identical to the scalar loops they replace
+// (elementwise wrapping ops; i32 sums cannot overflow, so order is free).
+// ===========================================================================
+const VL16: usize = std.simd.suggestVectorLength(i16) orelse 8;
+const VL32: usize = std.simd.suggestVectorLength(i32) orelse 4;
+comptime {
+    std.debug.assert(HIDDEN % VL16 == 0);
+    std.debug.assert((2 * PW) % (2 * VL32) == 0);
+}
+
+inline fn add_col(v: *[HIDDEN]i16, col: *const [HIDDEN]i16) void {
+    var i: usize = 0;
+    while (i < HIDDEN) : (i += VL16) {
+        const a: @Vector(VL16, i16) = v[i..][0..VL16].*;
+        const b: @Vector(VL16, i16) = col[i..][0..VL16].*;
+        v[i..][0..VL16].* = a +% b;
+    }
+}
+
+inline fn sub_col(v: *[HIDDEN]i16, col: *const [HIDDEN]i16) void {
+    var i: usize = 0;
+    while (i < HIDDEN) : (i += VL16) {
+        const a: @Vector(VL16, i16) = v[i..][0..VL16].*;
+        const b: @Vector(VL16, i16) = col[i..][0..VL16].*;
+        v[i..][0..VL16].* = a -% b;
+    }
+}
+
+/// Fused incremental update: dst = src - subs[..] + adds[..] in ONE pass over
+/// the accumulator (no intermediate copy — the copy+in-place-update pattern
+/// costs ~2x the memory traffic). `subs`/`adds` are comptime-length TUPLES of
+/// column pointers so they live in SSA registers — an in-memory pointer array
+/// can alias `dst` as far as LLVM knows, forcing per-chunk pointer reloads.
+/// Bit-identical to sequential sub/add: same elementwise wrapping ops.
+fn apply_fused(
+    dst: *[HIDDEN]i16,
+    src: *const [HIDDEN]i16,
+    subs: anytype,
+    adds: anytype,
+) void {
+    var i: usize = 0;
+    while (i < HIDDEN) : (i += VL16) {
+        var a: @Vector(VL16, i16) = src[i..][0..VL16].*;
+        inline for (subs) |c| a -%= @as(@Vector(VL16, i16), c[i..][0..VL16].*);
+        inline for (adds) |c| a +%= @as(@Vector(VL16, i16), c[i..][0..VL16].*);
+        dst[i..][0..VL16].* = a;
+    }
+}
+
 /// Rebuild a single perspective's accumulator from scratch under (mirror, bucket).
 fn refresh_one(acc: *Accumulator, board: *const Board, persp_white: bool, m: bool, b: usize) void {
     const ci: usize = if (persp_white) 0 else 1;
@@ -155,7 +210,7 @@ fn refresh_one(acc: *Accumulator, board: *const Board, persp_white: bool, m: boo
             const sq: u6 = @intCast(@ctz(bbv));
             bbv &= bbv - 1;
             const col = &feature_weights[feature_index(persp_white, pc, sq, m, b)];
-            for (0..HIDDEN) |i| acc.vals[ci][i] +%= col[i];
+            add_col(&acc.vals[ci], col);
         }
     }
 }
@@ -237,18 +292,31 @@ pub fn apply(board: *const Board, delta: FeatDelta) void {
         } else {
             dst.mirror[ci] = m;
             dst.bucket[ci] = b;
-            var v = src.vals[ci];
+            var subs: [2]*const [HIDDEN]i16 = undefined;
+            var adds: [2]*const [HIDDEN]i16 = undefined;
             var k: usize = 0;
             while (k < delta.n_sub) : (k += 1) {
-                const col = &feature_weights[feature_index(pw, delta.sub_pc[k], delta.sub_sq[k], m, b)];
-                for (0..HIDDEN) |i| v[i] -%= col[i];
+                subs[k] = &feature_weights[feature_index(pw, delta.sub_pc[k], delta.sub_sq[k], m, b)];
             }
             k = 0;
             while (k < delta.n_add) : (k += 1) {
-                const col = &feature_weights[feature_index(pw, delta.add_pc[k], delta.add_sq[k], m, b)];
-                for (0..HIDDEN) |i| v[i] +%= col[i];
+                adds[k] = &feature_weights[feature_index(pw, delta.add_pc[k], delta.add_sq[k], m, b)];
             }
-            dst.vals[ci] = v;
+            const dv = &dst.vals[ci];
+            const sv = &src.vals[ci];
+            if (delta.n_add == 1) {
+                if (delta.n_sub == 1) {
+                    apply_fused(dv, sv, .{subs[0]}, .{adds[0]}); // quiet
+                } else {
+                    apply_fused(dv, sv, .{ subs[0], subs[1] }, .{adds[0]}); // capture / ep
+                }
+            } else {
+                if (delta.n_sub == 1) {
+                    apply_fused(dv, sv, .{subs[0]}, .{ adds[0], adds[1] });
+                } else {
+                    apply_fused(dv, sv, .{ subs[0], subs[1] }, .{ adds[0], adds[1] }); // castling
+                }
+            }
         }
     }
 }
@@ -313,13 +381,34 @@ inline fn screlu_f(x: f32) f32 {
     return c * c;
 }
 
-/// L1 dot: u8 (pairwise activations, 0..254) x i8 (weights). Written as a plain
-/// reduction so LLVM's vectorizer emits `vpdpbusd` on AVX-512-VNNI (native build)
-/// — 4 int8 madds per i32 lane. Per-lane sum < 2^31 (1024 * 254*127 / 16 lanes).
+/// L1 dot: u8 (pairwise activations, 0..254) x i8 (weights), explicit vectors
+/// (0.16 has no loop auto-vec). Products fit i16 exactly (max 254*127 = 32258),
+/// adjacent pairs widen to i32 (the vpmaddwd/vpdpwssd idiom); per-lane sums stay
+/// far below 2^31, so lane reassociation is bit-identical to the scalar sum.
 fn dot_u8i8(x: *const [2 * PW]u8, w: *const [2 * PW]i8) i32 {
-    var acc: i32 = 0;
-    for (0..2 * PW) |j| acc += @as(i32, x[j]) * @as(i32, w[j]);
-    return acc;
+    const N = 2 * VL32; // elements per vector step
+    const U = 4; // independent accumulator chains (hide vpdpwssd latency)
+    comptime std.debug.assert((2 * PW) % (U * N) == 0);
+    var accs: [U]@Vector(VL32, i32) = undefined;
+    inline for (0..U) |u| accs[u] = @splat(0);
+    var j: usize = 0;
+    while (j < 2 * PW) : (j += U * N) {
+        inline for (0..U) |u| {
+            const xv: @Vector(N, u8) = x[j + u * N ..][0..N].*;
+            const wv: @Vector(N, i8) = w[j + u * N ..][0..N].*;
+            // Widen -> i32 multiply -> add even/odd lanes: LLVM's canonical
+            // PMADDWD shape (combineToPMADDWD), fusing mul+pairwise-add into
+            // one vpmaddwd/vpdpwssd instead of vpmullw + shuffles.
+            const xi: @Vector(N, i32) = @intCast(xv); // zext, <= 16 bits used
+            const wi: @Vector(N, i32) = @intCast(wv); // sext, <= 16 bits used
+            const prod = xi * wi;
+            const halves = std.simd.deinterlace(2, prod);
+            accs[u] += halves[0] + halves[1];
+        }
+    }
+    var acc = accs[0];
+    inline for (1..U) |u| acc += accs[u];
+    return @reduce(.Add, acc);
 }
 
 /// Multilayer forward pass. stm-relative centipawns.
@@ -437,7 +526,7 @@ pub fn load_bytes(data: []const u8) !void {
 
 /// Load a net from a file on disk (used until the net is `@embedFile`d).
 pub fn load_file(allocator: std.mem.Allocator, path: []const u8) !void {
-    const data = try std.fs.cwd().readFileAlloc(allocator, path, 64 << 20);
+    const data = try std.Io.Dir.cwd().readFileAlloc(globals.io, path, allocator, .limited(64 << 20));
     defer allocator.free(data);
     try load_bytes(data);
 }

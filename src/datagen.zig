@@ -7,6 +7,7 @@ const lists = @import("lists.zig");
 const search = @import("search.zig");
 const attacks = @import("attacks.zig");
 const nnue = @import("nnue.zig");
+const globals = @import("globals.zig");
 
 // Search reports forced mates as |score| > MATE_VALUE-100 (MATE_VALUE = 32000,
 // kept in sync with search.zig — mate scores must fit the i16 TT field).
@@ -71,8 +72,7 @@ const Sample = struct {
 
 /// Serialize `board` to a standard 6-field FEN into `buf`; returns the written slice.
 pub fn board_to_fen(board: *const types.Board, fullmove: u32, buf: []u8) []u8 {
-    var fbs = std.io.fixedBufferStream(buf);
-    const w = fbs.writer();
+    var w: std.Io.Writer = .fixed(buf);
 
     // Piece placement: rank 8 (index 7) down to rank 1 (index 0), files a..h.
     var rank: usize = 8;
@@ -122,7 +122,7 @@ pub fn board_to_fen(board: *const types.Board, fullmove: u32, buf: []u8) []u8 {
     // Halfmove clock + fullmove number
     w.print(" {d} {d}", .{ board.halfmove, fullmove }) catch {};
 
-    return fbs.getWritten();
+    return w.buffered();
 }
 
 // Fill `list` with legal moves and return whether the side to move is in check,
@@ -161,9 +161,10 @@ fn count_hash(history: []const u64, hash: u64) usize {
 
 /// Play one self-play game; write labeled lines to `out`. Returns positions written.
 fn play_one_game(
+    allocator: std.mem.Allocator,
     cfg: Config,
     rng: std.Random,
-    out: anytype,
+    out: *std.Io.Writer,
     samples: *std.ArrayList(Sample),
 ) !u64 {
     samples.clearRetainingCapacity();
@@ -285,7 +286,7 @@ fn play_one_game(
             s.len = fen.len;
             // Tiny scores carry no eval signal; snap to exactly 0 (Stormphrax).
             s.cp = if (white_cp >= -2 and white_cp <= 2) 0 else white_cp;
-            try samples.append(s);
+            try samples.append(allocator, s);
         }
 
         if (white_streak >= cfg.adj_win_plies) {
@@ -336,31 +337,32 @@ pub fn run(allocator: std.mem.Allocator, cfg: Config) !void {
         std.debug.print("datagen: labeling with embedded NNUE net\n", .{});
     }
 
-    var out_file = try std.fs.cwd().createFile(cfg.out_path, .{});
-    defer out_file.close();
-    var bw = std.io.bufferedWriter(out_file.writer());
-    const out = bw.writer();
+    var out_file = try std.Io.Dir.cwd().createFile(globals.io, cfg.out_path, .{});
+    defer out_file.close(globals.io);
+    var out_buf: [64 * 1024]u8 = undefined;
+    var out_fw = out_file.writer(globals.io, &out_buf);
+    const out = &out_fw.interface;
 
     var prng = std.Random.DefaultPrng.init(cfg.seed);
     const rng = prng.random();
 
-    var samples = std.ArrayList(Sample).init(allocator);
-    defer samples.deinit();
+    var samples: std.ArrayList(Sample) = .empty;
+    defer samples.deinit(allocator);
 
-    const start_ms = std.time.milliTimestamp();
+    const start_ms = globals.nowMs();
     var total: u64 = 0;
     var g: u64 = 0;
     while (g < cfg.games) : (g += 1) {
-        total += try play_one_game(cfg, rng, out, &samples);
+        total += try play_one_game(allocator, cfg, rng, out, &samples);
         if (cfg.verbose or (g + 1) % 100 == 0) {
-            const el = std.time.milliTimestamp() - start_ms;
+            const el = globals.nowMs() - start_ms;
             const pps: u64 = if (el > 0) total * 1000 / @as(u64, @intCast(el)) else 0;
             std.debug.print("datagen: game {}/{} positions={} pos/s={} elapsed={}ms\n", .{ g + 1, cfg.games, total, pps, el });
         }
     }
-    try bw.flush();
+    try out.flush();
 
-    const el = std.time.milliTimestamp() - start_ms;
+    const el = globals.nowMs() - start_ms;
     std.debug.print("datagen done: games={} positions={} out={s} elapsed={}ms openings_discarded={} games_dropped={} adj_wins={} adj_draws={}\n", .{ cfg.games, total, cfg.out_path, el, stat_openings_discarded, stat_games_dropped, stat_adj_wins, stat_adj_draws });
 }
 
@@ -387,7 +389,7 @@ fn printUsage() void {
     , .{});
 }
 
-pub fn parse_args(args: []const [:0]u8) !Config {
+pub fn parse_args(args: []const [:0]const u8) !Config {
     var cfg = Config{};
     var i: usize = 0;
     while (i < args.len) : (i += 1) {

@@ -10,6 +10,7 @@ const tt_mod = @import("tt.zig");
 const zobrist = @import("zobrist.zig");
 const movegen = @import("movegen.zig");
 const nnue = @import("nnue.zig");
+const globals = @import("globals.zig");
 const Move = move_gen.Move;
 
 pub var global_search: Search = undefined;
@@ -27,10 +28,18 @@ pub fn init_search() void {
     clear_corrhist();
 }
 
+var stdout_buf: [1024]u8 = undefined;
+var stdout_fw: ?std.Io.File.Writer = null;
+
 fn print(comptime fmt: []const u8, args: anytype) void {
     if (silent) return;
-    const w = std.io.getStdOut().writer();
-    w.print(fmt, args) catch {};
+    if (stdout_fw == null)
+        stdout_fw = std.Io.File.stdout().writerStreaming(globals.io, &stdout_buf);
+    const w = &stdout_fw.?.interface;
+    w.print(fmt, args) catch return;
+    // Flush per call: UCI GUIs need each info/bestmove line delivered
+    // immediately (matches the old unbuffered getStdOut writer).
+    w.flush() catch {};
 }
 
 pub fn init_tt(allocator: std.mem.Allocator, size_mb: usize) void {
@@ -204,7 +213,7 @@ pub const Search = struct {
     best_score: i32 = 0, // stm-relative cp of the deepest completed iteration (for datagen)
     stop_on_time: bool = false,
     stop: bool = false,
-    timer: std.time.Timer = undefined,
+    timer: globals.Timer = undefined,
     max_depth: u32 = 64,
     nodes: u64 = 0,
     ply: u16 = 0,
@@ -1149,7 +1158,7 @@ pub const Search = struct {
         self.nodes = 0;
         self.stop = false;
         self.hard_node_hit = false;
-        self.timer = std.time.Timer.start() catch unreachable;
+        self.timer = .start();
         self.soft_limit = soft_limit_ms;
         self.hard_limit = hard_limit_ms;
         self.ply = 0; // Reset ply counter

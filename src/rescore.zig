@@ -16,6 +16,7 @@ const bitboard = @import("bitboard.zig");
 const attacks = @import("attacks.zig");
 const search = @import("search.zig");
 const nnue = @import("nnue.zig");
+const globals = @import("globals.zig");
 
 pub const Config = struct {
     in_path: []const u8 = "",
@@ -80,19 +81,21 @@ pub fn run(allocator: std.mem.Allocator, cfg: Config) !void {
     nnue.use_nnue = true;
     search.silent = true;
 
-    var in = try std.fs.cwd().openFile(cfg.in_path, .{});
-    defer in.close();
-    const total = (try in.getEndPos()) / REC;
+    var in = try std.Io.Dir.cwd().openFile(globals.io, cfg.in_path, .{});
+    defer in.close(globals.io);
+    var in_buf: [64 * 1024]u8 = undefined;
+    var in_fr = in.reader(globals.io, &in_buf);
+    const total = (try in_fr.getSize()) / REC;
     if (cfg.start >= total) return error.StartBeyondEnd;
     const count = if (cfg.count == 0) total - cfg.start else @min(cfg.count, total - cfg.start);
-    try in.seekTo(cfg.start * REC);
-    var in_buf = std.io.bufferedReader(in.reader());
-    const reader = in_buf.reader();
+    try in_fr.seekTo(cfg.start * REC);
+    const reader = &in_fr.interface;
 
-    var out = try std.fs.cwd().createFile(cfg.out_path, .{});
-    defer out.close();
-    var out_buf = std.io.bufferedWriter(out.writer());
-    const writer = out_buf.writer();
+    var out = try std.Io.Dir.cwd().createFile(globals.io, cfg.out_path, .{});
+    defer out.close(globals.io);
+    var out_buf: [64 * 1024]u8 = undefined;
+    var out_fw = out.writer(globals.io, &out_buf);
+    const writer = &out_fw.interface;
 
     var rec: [REC]u8 = undefined;
     var fenbuf: [96]u8 = undefined;
@@ -100,7 +103,7 @@ pub fn run(allocator: std.mem.Allocator, cfg: Config) !void {
     var kept: u64 = 0;
     var i: u64 = 0;
     while (i < count) : (i += 1) {
-        reader.readNoEof(&rec) catch break;
+        reader.readSliceAll(&rec) catch break;
 
         const occ = std.mem.readInt(u64, rec[0..8], .little);
         var sqpiece: [64]u8 = .{255} ** 64;
@@ -133,11 +136,11 @@ pub fn run(allocator: std.mem.Allocator, cfg: Config) !void {
 
         try writer.writeAll(&rec);
     }
-    try out_buf.flush();
+    try writer.flush();
     std.debug.print("rescore done: range [{d},{d}) rescored={d} kept_original={d} -> {s}\n", .{ cfg.start, cfg.start + i, changed, kept, cfg.out_path });
 }
 
-pub fn parse_args(args: []const [:0]u8) !Config {
+pub fn parse_args(args: []const [:0]const u8) !Config {
     var cfg = Config{};
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
