@@ -88,7 +88,7 @@ pub const Color = enum {
     both,
 
     pub inline fn toU4(self: Color) u4 {
-        return @intCast(@intFromEnum(self)); 
+        return @intCast(@intFromEnum(self));
     }
 };
 
@@ -181,7 +181,6 @@ pub const Board = struct {
     hash: u64 = 0, // Zobrist hash
     halfmove: u16 = 0, // Half-move clock for 50-move rule
 
-
     pub const PieceCount = @intFromEnum(Piece.NO_PIECE) + 1;
 
     pub fn pieces_combined(self: *const Board) Bitboard {
@@ -209,20 +208,19 @@ pub const Board = struct {
         @setEvalBranchQuota(10000);
         return if (c == Color.White)
             self.pieces[Piece.WHITE_PAWN.toU4()] |
-            self.pieces[Piece.WHITE_KNIGHT.toU4()] |
-            self.pieces[Piece.WHITE_BISHOP.toU4()] |
-            self.pieces[Piece.WHITE_ROOK.toU4()] |
-            self.pieces[Piece.WHITE_QUEEN.toU4()] |
-            self.pieces[Piece.WHITE_KING.toU4()]
+                self.pieces[Piece.WHITE_KNIGHT.toU4()] |
+                self.pieces[Piece.WHITE_BISHOP.toU4()] |
+                self.pieces[Piece.WHITE_ROOK.toU4()] |
+                self.pieces[Piece.WHITE_QUEEN.toU4()] |
+                self.pieces[Piece.WHITE_KING.toU4()]
         else
             self.pieces[Piece.BLACK_PAWN.toU4()] |
-            self.pieces[Piece.BLACK_KNIGHT.toU4()] |
-            self.pieces[Piece.BLACK_BISHOP.toU4()] |
-            self.pieces[Piece.BLACK_ROOK.toU4()] |
-            self.pieces[Piece.BLACK_QUEEN.toU4()] |
-            self.pieces[Piece.BLACK_KING.toU4()];
+                self.pieces[Piece.BLACK_KNIGHT.toU4()] |
+                self.pieces[Piece.BLACK_BISHOP.toU4()] |
+                self.pieces[Piece.BLACK_ROOK.toU4()] |
+                self.pieces[Piece.BLACK_QUEEN.toU4()] |
+                self.pieces[Piece.BLACK_KING.toU4()];
     }
-
 
     // Get piece type at square — O(1) via the maintained mailbox
     // (WHITE_* = 0..5, BLACK_* = 8..13, so `& 7` is the piece type).
@@ -232,22 +230,21 @@ pub const Board = struct {
         return @enumFromInt(@intFromEnum(piece) & 7);
     }
 
-
     // Get piece at at square
-   pub inline fn get_piece_at(self: *const Board, sq: u6) Piece {
-    inline for (0..6) |i| {
-        if ((self.pieces[i] & (@as(u64, 1) << sq)) != 0) {
-            return @enumFromInt(i);
+    pub inline fn get_piece_at(self: *const Board, sq: u6) Piece {
+        inline for (0..6) |i| {
+            if ((self.pieces[i] & (@as(u64, 1) << sq)) != 0) {
+                return @enumFromInt(i);
+            }
         }
-    } 
-    inline for (8..14) |i| {
-        if ((self.pieces[i] & (@as(u64, 1) << sq)) != 0) {
-            return @enumFromInt(i);
+        inline for (8..14) |i| {
+            if ((self.pieces[i] & (@as(u64, 1) << sq)) != 0) {
+                return @enumFromInt(i);
+            }
         }
+
+        return Piece.NO_PIECE;
     }
-    
-    return Piece.NO_PIECE;
-}
 
     // Get piece color at square — O(1) via the maintained mailbox
     pub inline fn get_piece_color_at(self: *const Board, sq: u6) ?Color {
@@ -396,4 +393,3 @@ pub const square_bb = [_]u64{
     0x1000000000000000, 0x2000000000000000, 0x4000000000000000, 0x8000000000000000,
     0x0,
 };
-

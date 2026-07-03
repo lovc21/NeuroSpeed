@@ -14,7 +14,13 @@ const search = @import("search.zig");
 const datagen = @import("datagen.zig");
 const rescore = @import("rescore.zig");
 const nnue = @import("nnue.zig");
+const globals = @import("globals.zig");
 const debug = false;
+
+// Pull in the fast-memset override so its export is emitted.
+comptime {
+    _ = @import("memops.zig");
+}
 
 fn print_moves_and_scores(move_list: *const lists.MoveList, score_list: *const lists.ScoreList) void {
     print("\n=== Generated Moves and Scores ===\n", .{});
@@ -80,13 +86,12 @@ fn print_moves_and_scores(move_list: *const lists.MoveList, score_list: *const l
     print("\n", .{});
 }
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    globals.io = init.io;
+    const allocator = init.gpa;
 
-    const argv = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, argv);
+    // Arena frees on process exit; argv layout matches the old argsAlloc.
+    const argv = try init.minimal.args.toSlice(init.arena.allocator());
 
     // Subcommand: `NeuroSpeed datagen [options]` → self-play training-data generation.
     if (argv.len >= 2 and std.ascii.eqlIgnoreCase(argv[1], "datagen")) {
@@ -152,7 +157,9 @@ pub fn main() !void {
 }
 
 fn run_bench(depth: u8) void {
-    const stdout = std.io.getStdOut().writer();
+    var out_buf: [256]u8 = undefined;
+    var fw = std.Io.File.stdout().writerStreaming(globals.io, &out_buf);
+    const stdout = &fw.interface;
 
     attacks.init_attacks();
     search.init_search();
@@ -184,10 +191,7 @@ fn run_bench(depth: u8) void {
     search.init_tt(std.heap.page_allocator, 64);
 
     var total_nodes: u64 = 0;
-    var timer = std.time.Timer.start() catch {
-        print("Fatal: timer failed to start\n", .{});
-        return;
-    };
+    var timer: globals.Timer = .start();
 
     for (bench_positions) |fen| {
         var board = types.Board.new();
@@ -209,4 +213,5 @@ fn run_bench(depth: u8) void {
     const nps = @as(u128, total_nodes) * std.time.ns_per_s / elapsed_ns;
 
     stdout.print("{d} nodes {d} nps\n", .{ total_nodes, nps }) catch {};
+    stdout.flush() catch {};
 }

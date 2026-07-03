@@ -567,4 +567,3 @@ pub inline fn unmake_move_search(board: *types.Board, move: Move, undo: SearchUn
     board.hash = undo.hash;
     eval.global_evaluator = undo.evaluator;
 }
-

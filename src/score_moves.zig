@@ -45,48 +45,48 @@ const SCORE_PV_MOVE = 10000000;
 pub inline fn get_next_best_move(move_list: *lists.MoveList, score_list: *lists.ScoreList, i: usize) move_gen.Move {
     const count = score_list.count;
     if (i + 1 >= count) return move_list.moves[i];
-    
+
     var best_j = i;
     var max_score = score_list.scores[i];
-    
+
     if (max_score >= 9000000) {
         return move_list.moves[i];
     }
 
     const start = i + 1;
     const end = count;
-    
+
     for (start..end) |j| {
         const score = score_list.scores[j];
         if (score > max_score) {
             best_j = j;
             max_score = score;
-            
+
             if (score >= 9000000) break;
         }
     }
-    
+
     if (best_j != i) {
         const temp_move = move_list.moves[i];
         const temp_score = score_list.scores[i];
-        
+
         move_list.moves[i] = move_list.moves[best_j];
         score_list.scores[i] = score_list.scores[best_j];
-        
+
         move_list.moves[best_j] = temp_move;
         score_list.scores[best_j] = temp_score;
     }
-    
+
     return move_list.moves[i];
 }
 
 pub inline fn score_move(board: *types.Board, move_list: *lists.MoveList, score_list: *lists.ScoreList, pv_move: move_gen.Move, countermove: move_gen.Move) void {
     score_list.count = 0;
-    
+
     for (0..move_list.count) |i| {
         const move = move_list.moves[i];
         var score: i32 = 0;
-       
+
         if (!pv_move.is_empty() and moves_equal(move, pv_move)) {
             // TT/PV move must stay ordered first — do NOT let the capture/promotion
             // classification below overwrite its score.
@@ -98,19 +98,19 @@ pub inline fn score_move(board: *types.Board, move_list: *lists.MoveList, score_
             } else {
                 score = SCORE_PROMOTION_CAPTURE + @as(i32, @intFromEnum(move.flags));
             }
-        // 2. En passant Captures
-        }else if (move.flags == types.MoveFlags.EN_PASSANT) {
+            // 2. En passant Captures
+        } else if (move.flags == types.MoveFlags.EN_PASSANT) {
             score = SCORE_GOOD_CAPTURE + 105;
-        
-        // 2. Captures
-        }else if (move.is_capture()) {
-            const victim_type: ?types.PieceType =  types.Board.get_piece_type_at(board, move.to);
-            const attacker_type: ?types.PieceType =  types.Board.get_piece_type_at(board, move.from);
-                if (attacker_type == null) {
-                    print("DEBUG: Board state when attacker is null:\n",.{});
-                    bitboard.print_unicode_board(board.*);
-                    print("Move: {} to {}, flags: {}\n", .{move.from, move.to, move.flags});
-                }
+
+            // 2. Captures
+        } else if (move.is_capture()) {
+            const victim_type: ?types.PieceType = types.Board.get_piece_type_at(board, move.to);
+            const attacker_type: ?types.PieceType = types.Board.get_piece_type_at(board, move.from);
+            if (attacker_type == null) {
+                print("DEBUG: Board state when attacker is null:\n", .{});
+                bitboard.print_unicode_board(board.*);
+                print("Move: {} to {}, flags: {}\n", .{ move.from, move.to, move.flags });
+            }
 
             if (victim_type != null and attacker_type != null) {
                 // Single SEE classification at threshold 0: winning/even
@@ -121,10 +121,9 @@ pub inline fn score_move(board: *types.Board, move_list: *lists.MoveList, score_
                 } else {
                     score = SCORE_BAD_CAPTURE + MVV_LVA[@intFromEnum(victim_type.?)][@intFromEnum(attacker_type.?)];
                 }
-            // En passant capture
-            }else {
-                print("ERROR: Unknown capture move type - victim: {?}, attacker: {?}, flags: {}\n", 
-                      .{victim_type, attacker_type, move.flags});
+                // En passant capture
+            } else {
+                print("ERROR: Unknown capture move type - victim: {?}, attacker: {?}, flags: {}\n", .{ victim_type, attacker_type, move.flags });
                 score = SCORE_BAD_CAPTURE;
             }
         }
@@ -141,19 +140,19 @@ pub inline fn score_move(board: *types.Board, move_list: *lists.MoveList, score_
             // Better than quiet moves
             score = 100000;
         }
-        
+
         //5. Quiet moves gets a score of 0
         else {
             // score first killer move
-            if (std.meta.eql(move_list.moves[i] ,search.global_search.killer_moves[0][search.global_search.ply])) {
+            if (std.meta.eql(move_list.moves[i], search.global_search.killer_moves[0][search.global_search.ply])) {
                 score = SCORE_KILLER;
-            // score second killer move
-            } else if (std.meta.eql(move_list.moves[i],search.global_search.killer_moves[1][search.global_search.ply])) {
+                // score second killer move
+            } else if (std.meta.eql(move_list.moves[i], search.global_search.killer_moves[1][search.global_search.ply])) {
                 score = SCORE_KILLER_2;
-            // score countermove
+                // score countermove
             } else if (!countermove.is_empty() and moves_equal(move, countermove)) {
                 score = SCORE_COUNTERMOVE;
-            // score history + continuation history
+                // score history + continuation history
             } else {
                 score = search.global_search.history_moves[move.from][move.to];
 
@@ -186,7 +185,6 @@ pub inline fn score_move(board: *types.Board, move_list: *lists.MoveList, score_
         score_list.append(score);
     }
 }
-
 
 pub fn see(board: *const types.Board, move: move_gen.Move, threshold: i32) bool {
     // Promotions are always considered good
@@ -223,7 +221,7 @@ pub fn see(board: *const types.Board, move: move_gen.Move, threshold: i32) bool 
 
     // Set up the board state after the initial capture
     var occupied = board.pieces_combined() ^ types.square_bb[from];
-    
+
     if (move.flags == types.MoveFlags.EN_PASSANT) {
         const ep_capture_sq: u6 = if (board.side == types.Color.White) to - 8 else to + 8;
         occupied ^= types.square_bb[ep_capture_sq];
@@ -231,20 +229,20 @@ pub fn see(board: *const types.Board, move: move_gen.Move, threshold: i32) bool 
 
     // Get all attackers to the target square
     var attackers = bitboard.get_all_attackers(board, to, occupied);
-    
+
     // Remove the initial attacker from the attackers list
     attackers &= ~types.square_bb[from];
 
     // Get diagonal and orthogonal sliders for x-ray attacks
-    const bishops_queens = (board.pieces[@intFromEnum(types.Piece.WHITE_BISHOP)] | 
-                           board.pieces[@intFromEnum(types.Piece.BLACK_BISHOP)] |
-                           board.pieces[@intFromEnum(types.Piece.WHITE_QUEEN)] | 
-                           board.pieces[@intFromEnum(types.Piece.BLACK_QUEEN)]);
-                           
-    const rooks_queens = (board.pieces[@intFromEnum(types.Piece.WHITE_ROOK)] | 
-                         board.pieces[@intFromEnum(types.Piece.BLACK_ROOK)] |
-                         board.pieces[@intFromEnum(types.Piece.WHITE_QUEEN)] | 
-                         board.pieces[@intFromEnum(types.Piece.BLACK_QUEEN)]);
+    const bishops_queens = (board.pieces[@intFromEnum(types.Piece.WHITE_BISHOP)] |
+        board.pieces[@intFromEnum(types.Piece.BLACK_BISHOP)] |
+        board.pieces[@intFromEnum(types.Piece.WHITE_QUEEN)] |
+        board.pieces[@intFromEnum(types.Piece.BLACK_QUEEN)]);
+
+    const rooks_queens = (board.pieces[@intFromEnum(types.Piece.WHITE_ROOK)] |
+        board.pieces[@intFromEnum(types.Piece.BLACK_ROOK)] |
+        board.pieces[@intFromEnum(types.Piece.WHITE_QUEEN)] |
+        board.pieces[@intFromEnum(types.Piece.BLACK_QUEEN)]);
 
     var side = if (board.get_piece_color_at(from) == types.Color.White) types.Color.Black else types.Color.White;
     var loop_count: u8 = 0;
@@ -252,12 +250,12 @@ pub fn see(board: *const types.Board, move: move_gen.Move, threshold: i32) bool 
     // Exchange sequence
     while (attackers != 0 and loop_count < MAX_LOOP_COUNT) {
         loop_count += 1;
-        
+
         attackers &= occupied;
-        
+
         const side_mask = if (side == types.Color.White) board.set_pieces(.White) else board.set_pieces(.Black);
         const my_attackers = attackers & side_mask;
-        
+
         if (my_attackers == 0) {
             break;
         }
@@ -324,7 +322,7 @@ pub fn see(board: *const types.Board, move: move_gen.Move, threshold: i32) bool 
                 },
                 else => {},
             }
-            
+
             if (piece_type.? == .Queen) {
                 attackers |= attacks.get_rook_attacks(to, occupied) & rooks_queens;
             }
