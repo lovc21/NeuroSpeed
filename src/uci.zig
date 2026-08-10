@@ -7,6 +7,9 @@ const move_gen = @import("move.zig");
 const movegen = @import("movegen.zig");
 const print = std.debug.print;
 const search = @import("search.zig");
+const bench = @import("bench.zig");
+const datagen = @import("datagen.zig");
+const rescore = @import("rescore.zig");
 const lists = @import("lists.zig");
 const eval = @import("evaluation.zig");
 const nnue = @import("nnue.zig");
@@ -16,6 +19,51 @@ const UCI_COMMANDS_MAX: usize = 10000;
 const VERSION: []const u8 = "0.1";
 const ENGINE_NAME: []const u8 = "NeuroSpeed";
 const AUTHOR: []const u8 = "Jakob Dekleva";
+
+/// Batch-tool dispatch shared by the CLI (main.zig, `NeuroSpeed datagen ...`)
+/// and the UCI loop (`datagen ...` typed into a running engine). argv[0] is
+/// the tool name. Returns true if a tool ran (or its help was printed).
+///
+/// The tools run BEFORE the engine activates its net in CLI mode: datagen
+/// labels with the HCE unless --nnue is given (datagen.run flips use_nnue on
+/// itself; it never turns it off) — the loop-mode caller is responsible for
+/// saving/restoring nnue.use_nnue around this call.
+pub fn run_subcommand(allocator: std.mem.Allocator, argv: []const [:0]const u8) !bool {
+    if (argv.len == 0) return false;
+
+    // `datagen [options]` → self-play training-data generation.
+    if (std.ascii.eqlIgnoreCase(argv[0], "datagen")) {
+        const cfg = datagen.parse_args(argv[1..]) catch |err| {
+            if (err == error.HelpRequested) return true;
+            return err;
+        };
+        try datagen.run(allocator, cfg);
+        return true;
+    }
+
+    // `rescore [options]` → re-label a bulletformat file with the embedded
+    // NNUE via shallow search (Gen-3 data lever).
+    if (std.ascii.eqlIgnoreCase(argv[0], "rescore")) {
+        const cfg = try rescore.parse_args(argv[1..]);
+        try rescore.run(allocator, cfg);
+        return true;
+    }
+
+    // `dumpfen <in.data> <out.epd> <stride> <limit>` → sample decided records
+    // into a FEN opening book (in-band SPRT source).
+    if (std.ascii.eqlIgnoreCase(argv[0], "dumpfen")) {
+        if (argv.len < 5) {
+            print("usage: dumpfen <in.data> <out.epd> <stride> <limit>\n", .{});
+            return true;
+        }
+        const stride = try std.fmt.parseUnsigned(u64, argv[3], 10);
+        const limit = try std.fmt.parseUnsigned(u64, argv[4], 10);
+        try rescore.dump_fens(argv[1], argv[2], stride, limit);
+        return true;
+    }
+
+    return false;
+}
 
 pub const UCI = struct {
     board: types.Board,
@@ -230,15 +278,36 @@ pub const UCI = struct {
                     // Movestogo mode: scale by remaining moves
                     soft_limit = @min(7 * adj_time / (10 * mtg), 4 * time / 5);
                 } else {
-                    // Free/sudden-death time control: spend ~1/30 of remaining time per move
-                    // (was 1/50, which was too conservative for bullet and left depth on the
-                    // table). Hard limit below still caps absolute spend, so this never flags.
-                    soft_limit = @min(adj_time / 30, time / 5);
+                    // Free/sudden-death time control: spend ~1/30 of remaining
+                    // time per move. Below tm_collapse_ms the move horizon
+                    // collapses with the clock (Stockfish-style: 400ms → plan
+                    // 20 moves, 100ms → 5) so the engine keeps THINKING near
+                    // the flag instead of dribbling 1ms moves.
+                    var horizon: u64 = 30;
+                    if (time < @as(u64, @intCast(@max(0, search.params.tm_collapse_ms)))) {
+                        const div: u64 = @intCast(@max(1, search.params.tm_collapse_div));
+                        horizon = @min(30, @max(2, time / div));
+                    }
+                    // Bank the overhead for every expected remaining move
+                    // (Stockfish: OH*(2+mtg)) so the clock never dribbles into
+                    // the sub-20ms zone where poll granularity + IO latency
+                    // exceed the whole budget (observed: all 15+0 forfeits).
+                    const reserve: u64 = overhead * (2 + horizon);
+                    const banked: u64 = if (adj_time > reserve) adj_time - reserve else 1;
+                    soft_limit = @min(banked / horizon, time / 5);
                 }
 
-                // Hard limit: min(2.5*soft, 80% of remaining). Bullet can't
-                // afford the old 5x overshoots on a single move.
-                hard_limit = @min(soft_limit * 5 / 2, time * 4 / 5);
+                // Hard limit: tunable fraction of the overhead-adjusted clock.
+                // The old min(2.5*soft, 80%) ≈ 8.3% of the clock was 2.5-8x
+                // tighter than every verified engine (Ethereal 20%, Viridithas
+                // 46%, Stormphrax 65%, SF 81%, Berserk 92%) — critical moves
+                // (root fail-lows) are allowed to burn real time ONCE; normal
+                // moves are still governed by the soft limit.
+                const usable: u64 = if (time > overhead) time - overhead else 1;
+                // Clamp to [1, 100]: values above 100 (reachable via the unclamped
+                // SPSA setoption path) would let one move burn more than the whole
+                // remaining clock. Default 46 is unaffected.
+                hard_limit = usable * @as(u64, @intCast(@min(100, @max(1, search.params.tm_hard_pct)))) / 100;
 
                 // Safety buffer: always leave the overhead in reserve
                 if (time > overhead) {
@@ -261,34 +330,11 @@ pub const UCI = struct {
     }
 
     fn run_bench(self: *UCI, stdout: *std.Io.Writer) !void {
-        const bench_positions = [_][]const u8{
-            "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
-            "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
-            "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1",
-            "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1",
-            "rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8",
-        };
-
-        var total_nodes: u64 = 0;
+        // Quick in-loop identity check: first 5 bench positions at depth 11
+        // (311432 nodes for the champion config). The full 20-position CLI
+        // fingerprint lives behind `NeuroSpeed bench [depth]` (bench.zig).
         var timer: globals.Timer = .start();
-
-        for (bench_positions) |fen| {
-            try bitboard.parse_fen(fen, &self.board);
-
-            search.init_search();
-            if (search.global_tt) |*tt| {
-                tt.clear();
-            }
-
-            if (self.board.side == types.Color.White) {
-                search.search_position(&self.board, 11, 0, 0, types.Color.White);
-            } else {
-                search.search_position(&self.board, 11, 0, 0, types.Color.Black);
-            }
-
-            total_nodes += search.global_search.nodes;
-        }
-
+        const total_nodes = bench.run_nodes(&self.board, 5, 11);
         const elapsed_ns = @max(1, timer.read());
         const nps = @as(u128, total_nodes) * std.time.ns_per_s / elapsed_ns;
 
@@ -421,6 +467,55 @@ pub const UCI = struct {
             print("info string r50_div set to {}\n", .{nnue.r50_div});
         }
 
+        // Per-node dual-net router (SF style): |material| > small_thresh ->
+        // small net (-1 = always small, 30000 = never); small_guard = re-eval
+        // band with the big net when the small net's score is modest (0 = off).
+        if (std.mem.eql(u8, name, "small_thresh")) {
+            const v = std.fmt.parseInt(i32, value, 10) catch return;
+            nnue.small_thresh = @max(-1, @min(v, 30000));
+            print("info string small_thresh set to {}\n", .{nnue.small_thresh});
+        }
+        if (std.mem.eql(u8, name, "small_guard")) {
+            const v = std.fmt.parseInt(i32, value, 10) catch return;
+            nnue.small_guard = @max(0, @min(v, 2000));
+            print("info string small_guard set to {}\n", .{nnue.small_guard});
+        }
+        if (std.mem.eql(u8, name, "phase_floor_pct")) {
+            const v = std.fmt.parseInt(i32, value, 10) catch return;
+            nnue.phase_floor_pct = @max(30, @min(v, 100));
+            print("info string phase_floor_pct set to {}\n", .{nnue.phase_floor_pct});
+        }
+        if (std.mem.eql(u8, name, "hce_corner_pct")) {
+            const v = std.fmt.parseInt(i32, value, 10) catch return;
+            nnue.hce_corner_pct = @max(0, @min(v, 300));
+            print("info string hce_corner_pct set to {}\n", .{nnue.hce_corner_pct});
+        }
+        if (std.mem.eql(u8, name, "hce_kingdist_pct")) {
+            const v = std.fmt.parseInt(i32, value, 10) catch return;
+            nnue.hce_kingdist_pct = @max(0, @min(v, 300));
+            print("info string hce_kingdist_pct set to {}\n", .{nnue.hce_kingdist_pct});
+        }
+        if (std.mem.eql(u8, name, "hce_edge_pct")) {
+            const v = std.fmt.parseInt(i32, value, 10) catch return;
+            nnue.hce_edge_pct = @max(0, @min(v, 300));
+            print("info string hce_edge_pct set to {}\n", .{nnue.hce_edge_pct});
+        }
+        if (std.mem.eql(u8, name, "hce_tempo_pct")) {
+            const v = std.fmt.parseInt(i32, value, 10) catch return;
+            nnue.hce_tempo_pct = @max(0, @min(v, 300));
+            print("info string hce_tempo_pct set to {}\n", .{nnue.hce_tempo_pct});
+        }
+        if (std.mem.eql(u8, name, "hce_lazy_margin")) {
+            const v = std.fmt.parseInt(i32, value, 10) catch return;
+            nnue.hce_lazy_margin = @max(150, @min(v, 1200));
+            print("info string hce_lazy_margin set to {}\n", .{nnue.hce_lazy_margin});
+        }
+        if (std.mem.eql(u8, name, "hce_thresh")) {
+            const v = std.fmt.parseInt(i32, value, 10) catch return;
+            nnue.hce_thresh = @max(-1, @min(v, 30000));
+            print("info string hce_thresh set to {}\n", .{nnue.hce_thresh});
+        }
+
         // Tunable search parameters (SPSA): every search.Params field is a
         // UCI spin option with the same name.
         inline for (std.meta.fields(search.Params)) |f| {
@@ -479,6 +574,15 @@ pub const UCI = struct {
                     try stdout.print("option name UseNNUE type check default true\n", .{});
                     try stdout.print("option name Move Overhead type spin default 10 min 0 max 1000\n", .{});
                     try stdout.print("option name r50_div type spin default 0 min 0 max 1024\n", .{});
+                    try stdout.print("option name small_thresh type spin default {} min -1 max 30000\n", .{nnue.small_thresh});
+                    try stdout.print("option name small_guard type spin default {} min 0 max 2000\n", .{nnue.small_guard});
+                    try stdout.print("option name hce_thresh type spin default {} min -1 max 30000\n", .{nnue.hce_thresh});
+                    try stdout.print("option name phase_floor_pct type spin default {} min 30 max 100\n", .{nnue.phase_floor_pct});
+                    try stdout.print("option name hce_corner_pct type spin default {} min 0 max 300\n", .{nnue.hce_corner_pct});
+                    try stdout.print("option name hce_kingdist_pct type spin default {} min 0 max 300\n", .{nnue.hce_kingdist_pct});
+                    try stdout.print("option name hce_edge_pct type spin default {} min 0 max 300\n", .{nnue.hce_edge_pct});
+                    try stdout.print("option name hce_tempo_pct type spin default {} min 0 max 300\n", .{nnue.hce_tempo_pct});
+                    try stdout.print("option name hce_lazy_margin type spin default {} min 150 max 1200\n", .{nnue.hce_lazy_margin});
                     inline for (std.meta.fields(search.Params)) |f| {
                         try stdout.print("option name {s} type spin default {} min -1000000 max 1000000\n", .{ f.name, @field(search.params, f.name) });
                     }
@@ -507,6 +611,38 @@ pub const UCI = struct {
                 } else if (std.mem.eql(u8, command, "d")) {
                     // Debug command to display board
                     bitboard.print_unicode_board(self.board);
+                } else if (std.mem.eql(u8, command, "fen")) {
+                    var fbuf: [128]u8 = undefined;
+                    const f = @import("datagen.zig").board_to_fen(&self.board, 1, &fbuf);
+                    try stdout.print("{s}\n", .{f});
+                } else if (std.mem.eql(u8, command, "datagen") or
+                    std.mem.eql(u8, command, "rescore") or
+                    std.mem.eql(u8, command, "dumpfen"))
+                {
+                    // Batch tools, callable from a running engine too. CLI
+                    // parity: datagen labels with the HCE unless --nnue, so
+                    // the engine's active net is disabled around the call and
+                    // restored after; search/TT state is re-initialized since
+                    // the tool ran its own searches.
+                    var argbuf: [32][:0]const u8 = undefined;
+                    var argc: usize = 0;
+                    argbuf[argc] = try self.allocator.dupeZ(u8, command);
+                    argc += 1;
+                    while (tokens.next()) |t| {
+                        if (argc >= argbuf.len) break;
+                        argbuf[argc] = try self.allocator.dupeZ(u8, t);
+                        argc += 1;
+                    }
+                    defer for (argbuf[0..argc]) |a| self.allocator.free(a);
+
+                    const saved_use_nnue = nnue.use_nnue;
+                    nnue.use_nnue = false;
+                    _ = run_subcommand(self.allocator, argbuf[0..argc]) catch |err| {
+                        print("info string tool error: {}\n", .{err});
+                    };
+                    nnue.use_nnue = saved_use_nnue;
+                    search.init_search();
+                    if (search.global_tt) |*tt| tt.clear();
                 } else if (std.mem.eql(u8, command, "perft")) {
                     var depth: u8 = 1;
                     if (tokens.next()) |depth_str| {
@@ -547,10 +683,38 @@ pub const UCI = struct {
                     }
                 } else if (std.mem.eql(u8, command, "eval")) {
                     // Print static evaluation of the current position (White's perspective).
-                    const score_white = eval.global_evaluator.eval_full(&self.board, types.Color.White);
+                    // eval_full must be called with the true side to move: the NNUE branch
+                    // returns STM-relative scores regardless of the color param, so calling
+                    // it with White on a black-to-move position mislabels the sign. Negate
+                    // the STM-relative result for Black to get the White perspective.
+                    const score_white = if (self.board.side == types.Color.White)
+                        eval.global_evaluator.eval_full(&self.board, types.Color.White)
+                    else
+                        -eval.global_evaluator.eval_full(&self.board, types.Color.Black);
                     try stdout.print("eval cp {d} (white perspective)\n", .{score_white});
                 } else if (std.mem.eql(u8, command, "bench")) {
-                    try self.run_bench(stdout);
+                    // Bare `bench`: quick 5-position check at depth 11
+                    // (311432 for the champion config). `bench <depth>`: the
+                    // full 20-position fingerprint (`bench 6` = 56024).
+                    if (tokens.next()) |depth_str| {
+                        const depth = std.fmt.parseUnsigned(u8, depth_str, 10) catch 5;
+                        var timer: globals.Timer = .start();
+                        const total_nodes = bench.run_nodes(&self.board, bench.positions.len, depth);
+                        const elapsed_ns = @max(1, timer.read());
+                        const nps = @as(u128, total_nodes) * std.time.ns_per_s / elapsed_ns;
+                        try stdout.print("{d} nodes {d} nps\n", .{ total_nodes, nps });
+                    } else {
+                        try self.run_bench(stdout);
+                    }
+                } else if (std.mem.eql(u8, command, "verify")) {
+                    // Debug: refresh-and-compare both incremental accumulator
+                    // stacks on every eval. `verify` = on, `verify off` = off.
+                    if (tokens.next()) |arg| {
+                        nnue.verify_incremental = !std.mem.eql(u8, arg, "off");
+                    } else {
+                        nnue.verify_incremental = true;
+                    }
+                    try stdout.print("info string verify_incremental {}\n", .{nnue.verify_incremental});
                 } else if (std.mem.eql(u8, command, "speedbench")) {
                     var depth: u8 = 6;
                     if (tokens.next()) |depth_str| {

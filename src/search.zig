@@ -162,6 +162,13 @@ pub const Params = struct {
     tm_gate_pct: i32 = 60, // start next iteration only if elapsed < pct% of soft
     tm_stab_coef: i32 = 4, // soft-limit factor: 1 - coef/100*stability ...
     tm_impr_coef: i32 = 4, // ... - coef/100*score-trend
+    // --- Ultrabullet TM package v1 (verified field values, see thesis research doc) ---
+    tm_hard_pct: i32 = 46, // hard limit = pct% of (clock - overhead); field: Eth 20, Viri 46, SPX 65, SF 81
+    tm_collapse_ms: i32 = 1000, // clock below this → move horizon collapses (Stockfish-style)
+    tm_collapse_div: i32 = 20, // collapsed horizon = clock/div (400ms→20 moves, 100ms→5), min 2
+    tm_win_cp: i32 = 1000, // |score| beyond this = decided position
+    tm_win_pct: i32 = 60, // budget % when clearly winning (Stormphrax 0.6)
+    tm_loss_pct: i32 = 50, // budget % when clearly losing (Stormphrax 0.5)
     qs_delta: i32 = 150, // qsearch delta-pruning margin
     se_depth: i32 = 8, // singular-extension min depth (LTC-scaler: bullet test)
     iir_depth: i32 = 4, // IIR min depth (LTC-scaler: bullet test)
@@ -322,7 +329,9 @@ pub const Search = struct {
     }
 
     inline fn check_time(self: *Search) void {
-        if ((self.nodes & 2047) == 0) {
+        // 1023 mask ≈ 0.7ms at 1.4M NPS (Stormphrax polls every 1024 nodes);
+        // 2047 overshot sub-5ms hard limits near the flag at 15+0.
+        if ((self.nodes & 1023) == 0) {
             if (self.hard_limit > 0) {
                 const elapsed = self.timer.read() / std.time.ns_per_ms;
                 if (elapsed >= self.hard_limit) {
@@ -1178,8 +1187,10 @@ pub const Search = struct {
         if (nnue.use_nnue) nnue.stack_init(board);
         defer nnue.stack_stop();
 
-        // Forced move: with a single legal reply, a deep search can't change
-        // the move — spend a fraction of the budget and bank the clock.
+        // Forced move: with a single legal reply, searching can't change the
+        // move — play it as soon as the first iteration completes and bank the
+        // clock (Viridithas sets opt_time=0; Berserk caps at 250ms).
+        var single_reply = false;
         if (self.soft_limit > 0) {
             var root_moves: lists.MoveList = .{};
             if (board.side == types.Color.White) {
@@ -1188,7 +1199,7 @@ pub const Search = struct {
                 movegen.generate_legal_moves(board, &root_moves, types.Color.Black);
             }
             if (root_moves.count == 1) {
-                self.soft_limit = @max(1, self.soft_limit / 5);
+                single_reply = true;
             }
         }
 
@@ -1269,6 +1280,9 @@ pub const Search = struct {
             // Soft node limit (datagen): don't start another iteration once hit.
             if (self.soft_nodes > 0 and self.nodes >= self.soft_nodes) break;
 
+            // Single legal reply: the move is forced — instamove.
+            if (single_reply and self.pv_length[0] > 0) break;
+
             const elapsed = self.timer.read() / std.time.ns_per_ms;
 
             // Print search info
@@ -1343,6 +1357,19 @@ pub const Search = struct {
                 const impr_c: f32 = @as(f32, @floatFromInt(params.tm_impr_coef)) / 100.0;
                 var factor: f32 = 1.0 - stab_c * stab_f - impr_c * impr_f;
                 factor = @max(0.5, @min(1.5, factor));
+
+                // Decided positions: any sane move preserves the result — the
+                // clock is the real opponent, bank time (Stormphrax 0.6/0.5).
+                if (score >= params.tm_win_cp) {
+                    factor *= @as(f32, @floatFromInt(params.tm_win_pct)) / 100.0;
+                } else if (score <= -params.tm_win_cp) {
+                    factor *= @as(f32, @floatFromInt(params.tm_loss_pct)) / 100.0;
+                }
+                // Floor after the win/loss scaling: negative tm_win_pct/tm_loss_pct
+                // (reachable via the unclamped SPSA setoption path) would make the
+                // factor negative and @intFromFloat into u64 below is UB. Never
+                // binds at the defaults (60/50 keep factor in [0.15, 1.5]).
+                factor = @max(0.01, factor);
 
                 const adjusted_limit: u64 = @intFromFloat(@as(f32, @floatFromInt(self.soft_limit)) * factor);
                 const effective_limit = @min(adjusted_limit, self.hard_limit);
