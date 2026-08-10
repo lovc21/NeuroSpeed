@@ -678,6 +678,7 @@ test "Legal perft promo d5" {
 // Mirrors the UCI `speedbench` command; lets `zig build test` reproduce the
 // move generator / evaluation / search speeds for table tab:perft_positions.
 const search = @import("search.zig");
+const bench = @import("bench.zig");
 
 fn bench_eval_one(fen: []const u8, name: []const u8, iters: u64) !void {
     var board = types.Board.new();
@@ -873,4 +874,21 @@ test "datagen board_to_fen exact start-position string" {
         "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
         fen,
     );
+}
+
+test "bench is deterministic and nonzero" {
+    // The bench node count is the engine's reproducibility fingerprint
+    // (bench.zig). Run the UCI-bench subset twice at low depth: both runs
+    // must agree exactly (search determinism) and find real nodes.
+    attacks.init_attacks();
+    search.init_search();
+    search.init_tt(std.heap.page_allocator, 8);
+    try nnue.load_embedded();
+    nnue.use_nnue = true;
+
+    var board = types.Board.new();
+    const first = bench.run_nodes(&board, 5, 3);
+    const second = bench.run_nodes(&board, 5, 3);
+    try expect(first > 0);
+    try expect(first == second);
 }

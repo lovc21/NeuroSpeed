@@ -134,6 +134,11 @@ pub const Accumulator = struct {
     vals: [2][HIDDEN]i16 = undefined,
     mirror: [2]bool = .{ false, false },
     bucket: [2]usize = .{ 0, 0 },
+    // Lazy-update state: computed[ci] = vals[ci] is valid; else it must be
+    // resolved on demand from `delta` + the nearest computed ancestor. `delta`
+    // holds the world-feature change from the PARENT stack level to this one.
+    computed: [2]bool = .{ false, false },
+    delta: FeatDelta = .{},
 
     /// Rebuild both accumulators from scratch off the board bitboards.
     pub fn refresh(self: *Accumulator, board: *const Board) void {
@@ -302,7 +307,12 @@ pub var verify_incremental: bool = false;
 
 /// Begin incremental tracking for a search rooted at `board`.
 pub fn stack_init(board: *const Board) void {
+    // Anchor BOTH nets at the root (the small 128-wide refresh is trivial);
+    // per-node routing may evaluate either net anywhere in the tree.
     acc_stack[0].refresh(board);
+    acc_stack[0].computed = .{ true, true };
+    acc_stack_s[0].refresh(board);
+    acc_stack_s[0].computed = .{ true, true };
     acc_sp = 0;
     acc_active = true;
 }
@@ -338,73 +348,100 @@ pub const FeatDelta = struct {
     }
 };
 
-/// Push the next accumulator from `delta`. `board` is the POST-move position.
-/// Per perspective: if its own king crossed the d/e boundary (mirror flipped),
-/// fully refresh that perspective; otherwise copy the parent and apply the
-/// add/sub columns under the perspective's current mirror. At most one
-/// perspective can refresh per move (only one piece moves).
+/// Lazy push: record the next stack level's `delta` and resolve its mirror/
+/// bucket, but DEFER the actual accumulator arithmetic — `board` is the
+/// POST-move position. A perspective is computed on demand in ensure_computed()
+/// (many nodes are cut before eval and never need it). EXCEPTION: if a
+/// perspective's king crossed the d/e boundary (mirror/bucket changed) it needs
+/// a full refresh, which requires THIS node's board, so it is done eagerly now
+/// and becomes a computed anchor for descendants. At most one perspective can
+/// refresh per move (only one piece moves).
 pub fn apply(board: *const Board, delta: FeatDelta) void {
-    const src = &acc_stack[acc_sp];
+    // PER-NODE dual-net (SF style): record the delta into BOTH nets' lazy
+    // stacks — this is only stores; the accumulator arithmetic stays deferred,
+    // so only the net actually evaluated at a node resolves its column adds
+    // (ensure_computed / ensure_computed_s). Refreshes (king crossing the
+    // mirror boundary) stay eager and anchor both nets; they are rare.
+    const srcb = &acc_stack[acc_sp];
     acc_sp += 1;
-    const dst = &acc_stack[acc_sp];
+    const dstb = &acc_stack[acc_sp];
+    const dsts = &acc_stack_s[acc_sp];
+    dstb.delta = delta;
+    dsts.delta = delta;
 
-    // Phase 1: resolve mirror/bucket + column pointers for BOTH perspectives
-    // and prefetch every column up front — feature_weights is ~1 MB (bigger
-    // than L2), so columns often sit in L3; perspective 0's fused pass gives
-    // perspective 1's prefetches time to land. Semantically a no-op.
-    var need_refresh: [2]bool = undefined;
-    var mir: [2]bool = undefined;
-    var buck: [2]usize = undefined;
-    var subs: [2][2]*const [HIDDEN]i16 = undefined;
-    var adds: [2][2]*const [HIDDEN]i16 = undefined;
     inline for ([_]bool{ true, false }) |pw| {
         const ci: usize = if (pw) 0 else 1;
         const m = king_mirror(board, pw);
         const b = king_bucket(board, pw);
-        mir[ci] = m;
-        buck[ci] = b;
-        // King changed mirror or bucket → every feature remaps → full refresh.
-        need_refresh[ci] = (m != src.mirror[ci] or b != src.bucket[ci]);
-        if (!need_refresh[ci]) {
-            var k: usize = 0;
-            while (k < delta.n_sub) : (k += 1) {
-                const col = &feature_weights[feature_index(pw, delta.sub_pc[k], delta.sub_sq[k], m, b)];
-                subs[ci][k] = col;
-                @prefetch(col, .{ .rw = .read });
-            }
-            k = 0;
-            while (k < delta.n_add) : (k += 1) {
-                const col = &feature_weights[feature_index(pw, delta.add_pc[k], delta.add_sq[k], m, b)];
-                adds[ci][k] = col;
-                @prefetch(col, .{ .rw = .read });
-            }
+        if (m != srcb.mirror[ci] or b != srcb.bucket[ci]) {
+            // Refresh boundary — must compute now (needs this board). Anchor.
+            refresh_one(dstb, board, pw, m, b);
+            dstb.computed[ci] = true;
+            refresh_one_s(dsts, board, pw, m, b);
+            dsts.computed[ci] = true;
+        } else {
+            // Incremental — defer. mirror/bucket carry over from the parent.
+            dstb.mirror[ci] = m;
+            dstb.bucket[ci] = b;
+            dstb.computed[ci] = false;
+            dsts.mirror[ci] = m;
+            dsts.bucket[ci] = b;
+            dsts.computed[ci] = false;
         }
     }
+}
 
-    // Phase 2: execute.
-    inline for ([_]bool{ true, false }) |pw| {
-        const ci: usize = if (pw) 0 else 1;
-        if (need_refresh[ci]) {
-            refresh_one(dst, board, pw, mir[ci], buck[ci]);
+/// Apply one perspective's deferred delta: dst = src − subs[] + adds[], with the
+/// columns resolved under (m, b). Bit-identical to the old eager path.
+fn apply_delta_one(
+    dst: *[HIDDEN]i16,
+    src: *const [HIDDEN]i16,
+    delta: FeatDelta,
+    persp_white: bool,
+    m: bool,
+    b: usize,
+) void {
+    var subs: [2]*const [HIDDEN]i16 = undefined;
+    var adds: [2]*const [HIDDEN]i16 = undefined;
+    var k: usize = 0;
+    while (k < delta.n_sub) : (k += 1) {
+        subs[k] = &feature_weights[feature_index(persp_white, delta.sub_pc[k], delta.sub_sq[k], m, b)];
+        @prefetch(subs[k], .{ .rw = .read });
+    }
+    k = 0;
+    while (k < delta.n_add) : (k += 1) {
+        adds[k] = &feature_weights[feature_index(persp_white, delta.add_pc[k], delta.add_sq[k], m, b)];
+        @prefetch(adds[k], .{ .rw = .read });
+    }
+    if (delta.n_add == 1) {
+        if (delta.n_sub == 1) {
+            apply_fused(dst, src, .{subs[0]}, .{adds[0]}); // quiet
         } else {
-            dst.mirror[ci] = mir[ci];
-            dst.bucket[ci] = buck[ci];
-            const dv = &dst.vals[ci];
-            const sv = &src.vals[ci];
-            if (delta.n_add == 1) {
-                if (delta.n_sub == 1) {
-                    apply_fused(dv, sv, .{subs[ci][0]}, .{adds[ci][0]}); // quiet
-                } else {
-                    apply_fused(dv, sv, .{ subs[ci][0], subs[ci][1] }, .{adds[ci][0]}); // capture / ep
-                }
-            } else {
-                if (delta.n_sub == 1) {
-                    apply_fused(dv, sv, .{subs[ci][0]}, .{ adds[ci][0], adds[ci][1] });
-                } else {
-                    apply_fused(dv, sv, .{ subs[ci][0], subs[ci][1] }, .{ adds[ci][0], adds[ci][1] }); // castling
-                }
-            }
+            apply_fused(dst, src, .{ subs[0], subs[1] }, .{adds[0]}); // capture / ep
         }
+    } else {
+        if (delta.n_sub == 1) {
+            apply_fused(dst, src, .{subs[0]}, .{ adds[0], adds[1] });
+        } else {
+            apply_fused(dst, src, .{ subs[0], subs[1] }, .{ adds[0], adds[1] }); // castling
+        }
+    }
+}
+
+/// Resolve perspective `ci` of stack level `sp` on demand: walk up to the
+/// nearest computed ancestor, then replay each deferred delta forward,
+/// memoizing every intermediate level so later evals are O(1). The root and
+/// every refresh are computed anchors, so the search always terminates.
+fn ensure_computed(sp: usize, ci: usize) void {
+    if (acc_stack[sp].computed[ci]) return;
+    var anchor = sp;
+    while (!acc_stack[anchor].computed[ci]) anchor -= 1;
+    const pw = (ci == 0);
+    var l = anchor + 1;
+    while (l <= sp) : (l += 1) {
+        const lvl = &acc_stack[l];
+        apply_delta_one(&lvl.vals[ci], &acc_stack[l - 1].vals[ci], lvl.delta, pw, lvl.mirror[ci], lvl.bucket[ci]);
+        lvl.computed[ci] = true;
     }
 }
 
@@ -419,8 +456,27 @@ pub var r50_div: i32 = 0;
 pub fn evaluate_search(board: *const Board) i32 {
     var s: i32 = undefined;
     if (acc_active) {
-        if (verify_incremental) verify_stack_top(board);
-        s = evaluate_acc(&acc_stack[acc_sp], board.side, output_bucket(board));
+        if (want_small) {
+            ensure_computed_s(acc_sp, 0);
+            ensure_computed_s(acc_sp, 1);
+            if (verify_incremental) verify_stack_top_s(board);
+            s = evaluate_acc_s(&acc_stack_s[acc_sp], board.side, output_bucket(board));
+            // SF-style guard: material is lopsided but the eval is modest =
+            // compensation (sacrifice) — the decided-specialized small net is
+            // blind there, so re-evaluate with the big net. Rare, cheap insurance.
+            if (small_guard > 0 and s < small_guard and s > -small_guard) {
+                ensure_computed(acc_sp, 0);
+                ensure_computed(acc_sp, 1);
+                if (verify_incremental) verify_stack_top(board);
+                s = evaluate_acc(&acc_stack[acc_sp], board.side, output_bucket(board));
+            }
+        } else {
+            // Resolve any deferred accumulator work for the current top before use.
+            ensure_computed(acc_sp, 0);
+            ensure_computed(acc_sp, 1);
+            if (verify_incremental) verify_stack_top(board);
+            s = evaluate_acc(&acc_stack[acc_sp], board.side, output_bucket(board));
+        }
     } else {
         s = evaluate(board);
     }
@@ -443,6 +499,25 @@ fn verify_stack_top(board: *const Board) void {
                     .{ ci, i, fresh.vals[ci][i], acc_stack[acc_sp].vals[ci][i], acc_sp },
                 );
                 @panic("NNUE incremental accumulator mismatch");
+            }
+        }
+    }
+}
+
+/// Small-net counterpart of verify_stack_top: `verify` mode must exercise the
+/// small lazy chain (ensure_computed_s / apply_delta_one_s / refresh_one_s)
+/// too, or a small-path bug ships undetected behind a clean verify run.
+fn verify_stack_top_s(board: *const Board) void {
+    var fresh: AccumulatorS = undefined;
+    fresh.refresh(board);
+    for (0..2) |ci| {
+        for (0..HIDDEN_S) |i| {
+            if (fresh.vals[ci][i] != acc_stack_s[acc_sp].vals[ci][i]) {
+                std.debug.print(
+                    "NNUE small incremental mismatch: persp {} idx {} fresh {} inc {} (sp {})\n",
+                    .{ ci, i, fresh.vals[ci][i], acc_stack_s[acc_sp].vals[ci][i], acc_sp },
+                );
+                @panic("NNUE small incremental accumulator mismatch");
             }
         }
     }
@@ -572,6 +647,18 @@ pub fn evaluate_acc(acc: *const Accumulator, stm: Color, bucket: usize) i32 {
 
 /// Full evaluation of `board` from the side-to-move's perspective.
 pub fn evaluate(board: *const Board) i32 {
+    // Honor the per-node router outside the search stack too (UCI `eval`,
+    // evalspeed): want_small is set by Evaluator.eval from the material signal.
+    if (want_small) {
+        var acc_s: AccumulatorS = undefined;
+        acc_s.refresh(board);
+        const s = evaluate_acc_s(&acc_s, board.side, output_bucket(board));
+        // Mirror evaluate_search's small_guard: without it the display path
+        // (UCI `eval`, evalspeed) reports a different number than the search
+        // uses in guard-band positions (modest small-net score on lopsided
+        // material -> big-net re-eval).
+        if (!(small_guard > 0 and s < small_guard and s > -small_guard)) return s;
+    }
     var acc: Accumulator = undefined;
     acc.refresh(board);
     return evaluate_acc(&acc, board.side, output_bucket(board));
@@ -645,10 +732,350 @@ pub fn load_file(allocator: std.mem.Allocator, path: []const u8) !void {
     try load_bytes(data);
 }
 
-// The trained Gen-0 net, embedded for a dependency-free release build.
-const embedded_net = @embedFile("nnue_net.bin");
+// ===========================================================================
+// SMALL NET (dual-net "decided" tier): an isolated 128-wide multilayer NNUE,
+// decided-specialized (trained on |score|>=300 only). Structurally identical to
+// the big net (768->128 acc -> CReLU+pairwise(128->64/persp) -> concat(128) ->
+// per-bucket L1(128->16 i8) -SCReLU-> L2(16->32) -SCReLU-> L3(32->1)), just
+// narrower and with a plain DENSE L1 (no sparse-VNNI needed at 128-wide). Shares
+// the net-independent feature/mirror/bucket/delta logic. PER-NODE routing (SF
+// style): apply() records deltas into BOTH lazy stacks (stores only); at each
+// eval, `want_small` (set from the free incremental material signal) picks the
+// net and only that net's accumulator is resolved. The big-640 path above is
+// byte-for-byte untouched.
+// ===========================================================================
+const HIDDEN_S: usize = 128;
+const PW_S: usize = HIDDEN_S / 2; // 64
+/// Which architecture the embedded small net uses. `.multilayer` = ml128d
+/// (multilayer head, same shape as the big net). `.single` = sl128d (bullet
+/// single-layer: SCReLU(acc) -> concat -> per-bucket linear, no L2/L3 = the
+/// fastest head). Both share the SAME 128-wide accumulator machinery below;
+/// only the loader and the forward pass differ. Swap src/small_nnuev3.bin to the
+/// matching checkpoint when flipping this.
+const SMALL_ARCH: enum { multilayer, single } = .single;
+comptime {
+    std.debug.assert(HIDDEN_S % VL16 == 0);
+    std.debug.assert((2 * PW_S) % (2 * VL32) == 0);
+    std.debug.assert(PW_S % 16 == 0);
+}
 
-/// Load the embedded net into the module-level parameters and mark it ready.
+var fw_s: [INPUT][HIDDEN_S]i16 = undefined; // l0w
+var fb_s: [HIDDEN_S]i16 = undefined; // l0b
+var l1w_s: [OUTPUT_BUCKETS * L1_OUT][2 * PW_S]i8 = undefined; // in = 128
+var l1b_s: [OUTPUT_BUCKETS * L1_OUT]f32 = undefined;
+var l2w_s: [OUTPUT_BUCKETS * L2_OUT][L1_OUT]f32 = undefined;
+var l2b_s: [OUTPUT_BUCKETS * L2_OUT]f32 = undefined;
+var l3w_s: [OUTPUT_BUCKETS][L2_OUT]f32 = undefined;
+var l3b_s: [OUTPUT_BUCKETS]f32 = undefined;
+
+const NET_BYTES_S: usize =
+    INPUT * HIDDEN_S * @sizeOf(i16) + HIDDEN_S * @sizeOf(i16) +
+    (2 * PW_S) * (OUTPUT_BUCKETS * L1_OUT) * @sizeOf(i8) + (OUTPUT_BUCKETS * L1_OUT) * @sizeOf(f32) +
+    L1_OUT * (OUTPUT_BUCKETS * L2_OUT) * @sizeOf(f32) + (OUTPUT_BUCKETS * L2_OUT) * @sizeOf(f32) +
+    L2_OUT * OUTPUT_BUCKETS * @sizeOf(f32) + OUTPUT_BUCKETS * @sizeOf(f32);
+
+// --- Single-layer small-net head (SMALL_ARCH == .single): per-bucket linear
+// over SCReLU(acc) concat, bullet 4-tensor save format (all i16):
+//   l0w (QA) -> fw_s, l0b (QA) -> fb_s,
+//   l1w (QB, .transpose() = OUT-major disk[out*256 + in]) -> l1w_sl,
+//   l1b (QA*QB) -> l1b_sl.
+var l1w_sl: [OUTPUT_BUCKETS][2 * HIDDEN_S]i16 = undefined;
+var l1b_sl: [OUTPUT_BUCKETS]i16 = undefined;
+
+const NET_BYTES_SL: usize =
+    INPUT * HIDDEN_S * @sizeOf(i16) + HIDDEN_S * @sizeOf(i16) +
+    OUTPUT_BUCKETS * (2 * HIDDEN_S) * @sizeOf(i16) + OUTPUT_BUCKETS * @sizeOf(i16); // 200976
+
+fn load_bytes_small_single(data: []const u8) !void {
+    // Exact size (allowing bullet's up-to-63-byte alignment pad): a multilayer
+    // checkpoint (NET_BYTES_S = 232224) would pass a bare lower-bound check and
+    // load silently as garbage after a SMALL_ARCH flip without a file swap.
+    if (data.len < NET_BYTES_SL or data.len > NET_BYTES_SL + 63) return error.NnueNetSizeMismatch;
+    var off: usize = 0;
+    for (0..INPUT) |f| {
+        for (0..HIDDEN_S) |h| {
+            fw_s[f][h] = read_i16(data, off);
+            off += 2;
+        }
+    }
+    for (0..HIDDEN_S) |h| {
+        fb_s[h] = read_i16(data, off);
+        off += 2;
+    }
+    for (0..OUTPUT_BUCKETS) |o| {
+        for (0..2 * HIDDEN_S) |j| {
+            l1w_sl[o][j] = read_i16(data, off);
+            off += 2;
+        }
+    }
+    for (0..OUTPUT_BUCKETS) |o| {
+        l1b_sl[o] = read_i16(data, off);
+        off += 2;
+    }
+}
+
+fn load_bytes_small(data: []const u8) !void {
+    // Exact size (allowing bullet's up-to-63-byte pad) — see the single-layer
+    // loader: rejects an arch-mismatched small net file instead of misparsing it.
+    if (data.len < NET_BYTES_S or data.len > NET_BYTES_S + 63) return error.NnueNetSizeMismatch;
+    var off: usize = 0;
+    for (0..INPUT) |f| {
+        for (0..HIDDEN_S) |h| {
+            fw_s[f][h] = read_i16(data, off);
+            off += 2;
+        }
+    }
+    for (0..HIDDEN_S) |h| {
+        fb_s[h] = read_i16(data, off);
+        off += 2;
+    }
+    for (0..OUTPUT_BUCKETS * L1_OUT) |o| {
+        for (0..2 * PW_S) |j| {
+            l1w_s[o][j] = @bitCast(data[off]);
+            off += 1;
+        }
+    }
+    for (0..OUTPUT_BUCKETS * L1_OUT) |o| {
+        l1b_s[o] = read_f32(data, off);
+        off += 4;
+    }
+    for (0..OUTPUT_BUCKETS * L2_OUT) |o| {
+        for (0..L1_OUT) |k| {
+            l2w_s[o][k] = read_f32(data, off);
+            off += 4;
+        }
+    }
+    for (0..OUTPUT_BUCKETS * L2_OUT) |o| {
+        l2b_s[o] = read_f32(data, off);
+        off += 4;
+    }
+    for (0..OUTPUT_BUCKETS) |b| {
+        for (0..L2_OUT) |m| {
+            l3w_s[b][m] = read_f32(data, off);
+            off += 4;
+        }
+    }
+    for (0..OUTPUT_BUCKETS) |b| {
+        l3b_s[b] = read_f32(data, off);
+        off += 4;
+    }
+}
+
+inline fn add_col_s(v: *[HIDDEN_S]i16, col: *const [HIDDEN_S]i16) void {
+    var i: usize = 0;
+    while (i < HIDDEN_S) : (i += VL16) {
+        const a: @Vector(VL16, i16) = v[i..][0..VL16].*;
+        const b: @Vector(VL16, i16) = col[i..][0..VL16].*;
+        v[i..][0..VL16].* = a +% b;
+    }
+}
+fn apply_fused_s(dst: *[HIDDEN_S]i16, src: *const [HIDDEN_S]i16, subs: anytype, adds: anytype) void {
+    var i: usize = 0;
+    while (i < HIDDEN_S) : (i += VL16) {
+        var a: @Vector(VL16, i16) = src[i..][0..VL16].*;
+        inline for (subs) |c| a -%= @as(@Vector(VL16, i16), c[i..][0..VL16].*);
+        inline for (adds) |c| a +%= @as(@Vector(VL16, i16), c[i..][0..VL16].*);
+        dst[i..][0..VL16].* = a;
+    }
+}
+
+pub const AccumulatorS = struct {
+    vals: [2][HIDDEN_S]i16 = undefined,
+    mirror: [2]bool = .{ false, false },
+    bucket: [2]usize = .{ 0, 0 },
+    computed: [2]bool = .{ false, false },
+    delta: FeatDelta = .{},
+    pub fn refresh(self: *AccumulatorS, board: *const Board) void {
+        inline for ([_]bool{ true, false }) |pw| {
+            refresh_one_s(self, board, pw, king_mirror(board, pw), king_bucket(board, pw));
+        }
+    }
+};
+
+fn refresh_one_s(acc: *AccumulatorS, board: *const Board, persp_white: bool, m: bool, b: usize) void {
+    const ci: usize = if (persp_white) 0 else 1;
+    acc.mirror[ci] = m;
+    acc.bucket[ci] = b;
+    acc.vals[ci] = fb_s;
+    inline for ([_]usize{ 0, 1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13 }) |pc| {
+        var bbv = board.pieces[pc];
+        while (bbv != 0) {
+            const sq: u6 = @intCast(@ctz(bbv));
+            bbv &= bbv - 1;
+            add_col_s(&acc.vals[ci], &fw_s[feature_index(persp_white, pc, sq, m, b)]);
+        }
+    }
+}
+
+fn apply_delta_one_s(dst: *[HIDDEN_S]i16, src: *const [HIDDEN_S]i16, delta: FeatDelta, persp_white: bool, m: bool, b: usize) void {
+    var subs: [2]*const [HIDDEN_S]i16 = undefined;
+    var adds: [2]*const [HIDDEN_S]i16 = undefined;
+    var k: usize = 0;
+    while (k < delta.n_sub) : (k += 1) subs[k] = &fw_s[feature_index(persp_white, delta.sub_pc[k], delta.sub_sq[k], m, b)];
+    k = 0;
+    while (k < delta.n_add) : (k += 1) adds[k] = &fw_s[feature_index(persp_white, delta.add_pc[k], delta.add_sq[k], m, b)];
+    if (delta.n_add == 1) {
+        if (delta.n_sub == 1) apply_fused_s(dst, src, .{subs[0]}, .{adds[0]}) else apply_fused_s(dst, src, .{ subs[0], subs[1] }, .{adds[0]});
+    } else {
+        if (delta.n_sub == 1) apply_fused_s(dst, src, .{subs[0]}, .{ adds[0], adds[1] }) else apply_fused_s(dst, src, .{ subs[0], subs[1] }, .{ adds[0], adds[1] });
+    }
+}
+
+pub var acc_stack_s: [STACK_SIZE]AccumulatorS = undefined;
+
+fn ensure_computed_s(sp: usize, ci: usize) void {
+    if (acc_stack_s[sp].computed[ci]) return;
+    var anchor = sp;
+    while (!acc_stack_s[anchor].computed[ci]) anchor -= 1;
+    const pw = (ci == 0);
+    var l = anchor + 1;
+    while (l <= sp) : (l += 1) {
+        const lvl = &acc_stack_s[l];
+        apply_delta_one_s(&lvl.vals[ci], &acc_stack_s[l - 1].vals[ci], lvl.delta, pw, lvl.mirror[ci], lvl.bucket[ci]);
+        lvl.computed[ci] = true;
+    }
+}
+
+/// Dense u8 x i8 dot over the 128-lane small-net activation (exact i32 sum, same
+/// PMADDWD widen idiom as the big net's dot_u8i8 → identical integer result).
+fn dot_u8i8_s(x: *const [2 * PW_S]u8, w: *const [2 * PW_S]i8) i32 {
+    const N = 2 * VL32;
+    var acc: @Vector(VL32, i32) = @splat(0);
+    var j: usize = 0;
+    while (j < 2 * PW_S) : (j += N) {
+        const xv: @Vector(N, u8) = x[j..][0..N].*;
+        const wv: @Vector(N, i8) = w[j..][0..N].*;
+        const xi: @Vector(N, i32) = @intCast(xv);
+        const wi: @Vector(N, i32) = @intCast(wv);
+        const prod = xi * wi;
+        const halves = std.simd.deinterlace(2, prod);
+        acc += halves[0] + halves[1];
+    }
+    return @reduce(.Add, acc);
+}
+
+/// Small-net multilayer forward pass. stm-relative centipawns. Mirrors
+/// evaluate_acc exactly at HIDDEN_S=128 (dense L1); same quant/dequant/order so
+/// forcing the router to always-small reproduces the standalone 128 net bit-for-bit.
+/// Small-net forward pass, dispatched on SMALL_ARCH at comptime.
+pub fn evaluate_acc_s(acc: *const AccumulatorS, stm: Color, bucket: usize) i32 {
+    return if (comptime SMALL_ARCH == .multilayer)
+        evaluate_acc_s_ml(acc, stm, bucket)
+    else
+        evaluate_acc_s_single(acc, stm, bucket);
+}
+
+/// Single-layer forward pass (bullet standard): raw = SCReLU(acc_us)·w_us +
+/// SCReLU(acc_them)·w_them, cp = (raw/QA + l1b)*SCALE/(QA*QB). i64 accumulation:
+/// screlu <= QA^2 = 65025 times an i16 weight exceeds i32 per term. Integer
+/// divisions are @divTrunc to match bullet's Rust `/` on integers exactly.
+fn evaluate_acc_s_single(acc: *const AccumulatorS, stm: Color, bucket: usize) i32 {
+    const us: usize = @intFromEnum(stm);
+    const them: usize = us ^ 1;
+    const w = &l1w_sl[bucket];
+    var sum: i64 = 0;
+    // 4-way unroll; scalar i64 madds (the head is 256 madds total — the
+    // accumulator update dominates; vectorize only if evalspeed disappoints).
+    inline for ([_]usize{ 0, 1 }) |side| {
+        const av = if (side == 0) &acc.vals[us] else &acc.vals[them];
+        const base = side * HIDDEN_S;
+        var i: usize = 0;
+        while (i < HIDDEN_S) : (i += 4) {
+            sum += @as(i64, screlu(av[i + 0])) * w[base + i + 0];
+            sum += @as(i64, screlu(av[i + 1])) * w[base + i + 1];
+            sum += @as(i64, screlu(av[i + 2])) * w[base + i + 2];
+            sum += @as(i64, screlu(av[i + 3])) * w[base + i + 3];
+        }
+    }
+    var out: i64 = @divTrunc(sum, QA64) + l1b_sl[bucket];
+    out = @divTrunc(out * SCALE64, QA64 * QB64);
+    return @intCast(out);
+}
+
+fn evaluate_acc_s_ml(acc: *const AccumulatorS, stm: Color, bucket: usize) i32 {
+    const us: usize = @intFromEnum(stm);
+    const them: usize = us ^ 1;
+    var x8: [2 * PW_S]u8 align(64) = undefined;
+    const PVL = 16;
+    const z: @Vector(PVL, i16) = @splat(0);
+    const q: @Vector(PVL, i16) = @splat(@as(i16, QA));
+    inline for ([_]usize{ 0, 1 }) |side| {
+        const av = if (side == 0) &acc.vals[us] else &acc.vals[them];
+        const base = side * PW_S;
+        var j: usize = 0;
+        while (j < PW_S) : (j += PVL) {
+            const lo: @Vector(PVL, i16) = av[j..][0..PVL].*;
+            const hi: @Vector(PVL, i16) = av[j + PW_S ..][0..PVL].*;
+            const lc: @Vector(PVL, i32) = @min(@max(lo, z), q);
+            const hc: @Vector(PVL, i32) = @min(@max(hi, z), q);
+            const p: @Vector(PVL, i32) = (lc * hc) >> @splat(8);
+            x8[base + j ..][0..PVL].* = @as(@Vector(PVL, u8), @intCast(p));
+        }
+    }
+    var h2: [L1_OUT]f32 = undefined;
+    const l1o = bucket * L1_OUT;
+    for (0..L1_OUT) |k| {
+        const s = dot_u8i8_s(&x8, &l1w_s[l1o + k]);
+        h2[k] = screlu_f(@as(f32, @floatFromInt(s)) / L1_DEQUANT + l1b_s[l1o + k]);
+    }
+    var h3: [L2_OUT]f32 = undefined;
+    const l2o = bucket * L2_OUT;
+    for (0..L2_OUT) |mm| {
+        const wrow = &l2w_s[l2o + mm];
+        var t: f32 = l2b_s[l2o + mm];
+        for (0..L1_OUT) |k| t += wrow[k] * h2[k];
+        h3[mm] = screlu_f(t);
+    }
+    var o: f32 = l3b_s[bucket];
+    for (0..L2_OUT) |mm| o += l3w_s[bucket][mm] * h3[mm];
+    return @intFromFloat(@round(o * @as(f32, @floatFromInt(SCALE))));
+}
+
+// --- Per-NODE net router (SF style). The selection signal is the FREE
+// incrementally-maintained material balance (evaluation.zig material_mg, kept
+// current at every make/unmake): Evaluator.eval sets `want_small` before each
+// evaluate_search call. Lopsided material (|mat| > small_thresh) -> small net;
+// else big net. small_guard: if the small net returns a modest score despite
+// lopsided material (= compensation/sacrifice, which the decided-specialized
+// net never learned), re-evaluate with the big net.
+// Force modes for validation: small_thresh=30000 -> pure big (bench identity
+// 65464); small_thresh=-1 + small_guard=0 -> pure small (bench identity 54171).
+pub var small_thresh: i32 = 475; // cp of material_mg scale (~minor piece)
+pub var small_guard: i32 = 248; // re-eval band; 0 = off
+pub var want_small: bool = false;
+/// Third tier ("sudden death"): |material| above this -> HCE, the fastest eval
+/// (~10x, lazy alpha/beta cutoffs). In dead-won positions eval precision is
+/// irrelevant — only NPS converts, exactly the bullet time-scramble case.
+/// Tier ladder (Evaluator.eval): |mat| > hce_thresh -> HCE, > small_thresh ->
+/// small NNUE, else big NNUE. 30000 disables the tier (SF12-15 shipped this
+/// exact hybrid: classical eval when material very lopsided, NNUE otherwise).
+pub var hce_thresh: i32 = 895;
+// Stage 3 (Hybrid-v2): scale the router thresholds by game phase. 100 = off
+// (bit-identical). Below 100: full board keeps thresholds, and as material
+// comes off they shrink linearly toward phase_floor_pct% — the fast tiers are
+// safest in simplified, conversion-dominated endgames. Clamped [30, 100].
+pub var phase_floor_pct: i32 = 100;
+// Stage 4 (Hybrid-v2): HCE conversion scalars, percent (100 = neutral,
+// bit-identical). Scale the "win a won position" machinery inside hce_eval /
+// evaluate_special_endgames; SPSA-tunable at bullet TC.
+pub var hce_corner_pct: i32 = 100; // corner-driving bonus (B+N mate corners)
+pub var hce_kingdist_pct: i32 = 100; // king-proximity term in won endgames
+pub var hce_edge_pct: i32 = 100; // CENTER_CONTROL edge-driving term
+pub var hce_tempo_pct: i32 = 100; // both tempo bonuses (mg/eg interpolated)
+pub var hce_lazy_margin: i32 = 600; // replaces the LAZY_MARGIN const
+
+// The trained Gen-0 net, embedded for a dependency-free release build.
+// Resolved via the anonymous imports registered in build.zig — the actual
+// files are nets/big_nnuev3.bin and nets/small_nnuev3.bin at the repo root.
+const embedded_net = @embedFile("big_nnuev3");
+const embedded_net_small = @embedFile("small_nnuev3");
+
+/// Load the embedded nets into the module-level parameters and mark ready.
 pub fn load_embedded() !void {
     try load_bytes(embedded_net);
+    if (comptime SMALL_ARCH == .multilayer) {
+        try load_bytes_small(embedded_net_small);
+    } else {
+        try load_bytes_small_single(embedded_net_small);
+    }
 }

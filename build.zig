@@ -24,6 +24,12 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    // The NNUE nets live in nets/ (outside the src/ module root), so they are
+    // registered as anonymous imports — @embedFile("big_nnuev3") in nnue.zig
+    // resolves through these.
+    exe.root_module.addAnonymousImport("big_nnuev3", .{ .root_source_file = b.path("nets/big_nnuev3.bin") });
+    exe.root_module.addAnonymousImport("small_nnuev3", .{ .root_source_file = b.path("nets/small_nnuev3.bin") });
+
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
     // step when running `zig build`).
@@ -59,6 +65,9 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+
+    exe_unit_tests.root_module.addAnonymousImport("big_nnuev3", .{ .root_source_file = b.path("nets/big_nnuev3.bin") });
+    exe_unit_tests.root_module.addAnonymousImport("small_nnuev3", .{ .root_source_file = b.path("nets/small_nnuev3.bin") });
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
 

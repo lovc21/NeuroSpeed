@@ -140,6 +140,66 @@ pub fn run(allocator: std.mem.Allocator, cfg: Config) !void {
     std.debug.print("rescore done: range [{d},{d}) rescored={d} kept_original={d} -> {s}\n", .{ cfg.start, cfg.start + i, changed, kept, cfg.out_path });
 }
 
+/// Sample every `stride`-th record from a bulletformat file and emit its
+/// reconstructed White-to-move FEN (one per line) to out_path, up to `limit`
+/// FENs. Used to build a decided-position opening book from gen23_decided.data
+/// (records already filtered to |score| >= 300), so an SPRT started from these
+/// measures a net's IN-BAND conversion strength. Reuses build_fen (tested).
+pub fn dump_fens(in_path: []const u8, out_path: []const u8, stride: u64, limit: u64) !void {
+    attacks.init_attacks();
+    var in = try std.Io.Dir.cwd().openFile(globals.io, in_path, .{});
+    defer in.close(globals.io);
+    var in_buf: [64 * 1024]u8 = undefined;
+    var in_fr = in.reader(globals.io, &in_buf);
+    const total = (try in_fr.getSize()) / REC;
+    const reader = &in_fr.interface;
+
+    var out = try std.Io.Dir.cwd().createFile(globals.io, out_path, .{});
+    defer out.close(globals.io);
+    var out_buf: [64 * 1024]u8 = undefined;
+    var out_fw = out.writer(globals.io, &out_buf);
+    const writer = &out_fw.interface;
+
+    var rec: [REC]u8 = undefined;
+    var fenbuf: [96]u8 = undefined;
+    var emitted: u64 = 0;
+    var i: u64 = 0;
+    // stride == 0 would never advance `i`: an infinite loop on a skipped
+    // record, or `limit` copies of one FEN — reject it up front.
+    if (stride == 0) return error.InvalidStride;
+    while (i < total and emitted < limit) : (i += stride) {
+        try in_fr.seekTo(i * REC);
+        reader.readSliceAll(&rec) catch break;
+
+        const occ = std.mem.readInt(u64, rec[0..8], .little);
+        var sqpiece: [64]u8 = .{255} ** 64;
+        var occ2 = occ;
+        var idx: usize = 0;
+        while (occ2 != 0) : (idx += 1) {
+            const sq: u6 = @intCast(@ctz(occ2));
+            occ2 &= occ2 - 1;
+            const nib: u8 = (rec[8 + idx / 2] >> @as(u3, @intCast(4 * (idx & 1)))) & 0xF;
+            sqpiece[sq] = nib;
+        }
+
+        // Sanity: exactly one king per side, else skip (corrupt/edge record).
+        var wk: u8 = 0;
+        var bk: u8 = 0;
+        for (sqpiece) |nb| {
+            if (nb == 5) wk += 1;
+            if (nb == 13) bk += 1;
+        }
+        if (wk != 1 or bk != 1) continue;
+
+        const fen = build_fen(&sqpiece, fenbuf[0..]);
+        try writer.writeAll(fen);
+        try writer.writeAll("\n");
+        emitted += 1;
+    }
+    try writer.flush();
+    std.debug.print("dump_fens: {d} FENs (stride {d}) -> {s}\n", .{ emitted, stride, out_path });
+}
+
 pub fn parse_args(args: []const [:0]const u8) !Config {
     var cfg = Config{};
     var i: usize = 0;

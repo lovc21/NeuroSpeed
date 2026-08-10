@@ -369,7 +369,8 @@ pub const Evaluator = struct {
         }
 
         const phase: i32 = @intCast(@min(self.phase[types.Color.White.toU4()] + self.phase[types.Color.Black.toU4()], 64));
-        const tempo_bonus: i32 = @divTrunc(mid_game_tempo_bonus * phase + end_game_tempo_bonus * (64 - phase), 64);
+        const tempo_raw: i32 = @divTrunc(mid_game_tempo_bonus * phase + end_game_tempo_bonus * (64 - phase), 64);
+        const tempo_bonus: i32 = @divTrunc(tempo_raw * nnue.hce_tempo_pct, 100);
 
         // Cheap base: incremental piece-square tables + incremental material.
         // mid_game_eval/end_game_eval are maintained incrementally in make_move_search.
@@ -384,7 +385,7 @@ pub const Evaluator = struct {
 
         // Lazy cutoff in the side-to-move perspective (matches the caller's alpha/beta).
         const lazy_stm: i32 = if (color == types.Color.White) base_score + tempo_bonus else -(base_score + tempo_bonus);
-        if (lazy_stm - LAZY_MARGIN >= beta or lazy_stm + LAZY_MARGIN <= alpha) {
+        if (lazy_stm - nnue.hce_lazy_margin >= beta or lazy_stm + nnue.hce_lazy_margin <= alpha) {
             return lazy_stm;
         }
 
@@ -401,6 +402,31 @@ pub const Evaluator = struct {
 
     pub fn eval(self: Evaluator, board: *const types.Board, comptime color: types.Color, alpha: i32, beta: i32) i32 {
         if (nnue.use_nnue) {
+            // Three-tier per-node router on the FREE incremental material
+            // signal (white-relative, maintained by make/unmake):
+            //   |mat| > hce_thresh   -> HCE   (dead-won: fastest eval, NPS is
+            //                                  all that matters in bullet)
+            //   |mat| > small_thresh -> small NNUE (winning: cheap + in-band)
+            //   else                 -> big NNUE   (everything else)
+            const amat = if (self.material_mg < 0) -self.material_mg else self.material_mg;
+            var small_t = nnue.small_thresh;
+            var hce_t = nnue.hce_thresh;
+            if (nnue.phase_floor_pct < 100) {
+                // Stage 3 phase-aware routing: full board (phase 32) keeps the
+                // thresholds; as material comes off they shrink linearly toward
+                // phase_floor_pct% (fast tiers are safest in simple endgames).
+                const ph: i32 = @min(@as(i32, self.phase[0]) + @as(i32, self.phase[1]), 32);
+                const scale: i32 = nnue.phase_floor_pct + @divTrunc((100 - nnue.phase_floor_pct) * ph, 32);
+                // Only scale non-negative thresholds: -1 is the documented
+                // force-mode sentinel (always small / always HCE) and
+                // @divTrunc(-1 * scale, 100) would silently turn it into 0.
+                if (small_t >= 0) small_t = @divTrunc(small_t * scale, 100);
+                if (hce_t >= 0) hce_t = @divTrunc(hce_t * scale, 100);
+            }
+            if (amat > hce_t) {
+                return self.hce_eval(board, color, alpha, beta);
+            }
+            nnue.want_small = amat > small_t;
             return nnue.evaluate_search(board);
         } else {
             return self.hce_eval(board, color, alpha, beta);
@@ -411,6 +437,7 @@ pub const Evaluator = struct {
     pub fn eval_full(self: Evaluator, board: *const types.Board, comptime color: types.Color) i32 {
         return self.eval(board, color, -1_000_000, 1_000_000);
     }
+
 
     inline fn evaluate_special_endgames(self: Evaluator, board: *const types.Board) i32 {
         var endgame_bonus: i32 = 0;
@@ -435,20 +462,20 @@ pub const Evaluator = struct {
                 // Bishop + Knight mate: drive king to correct corner
                 if (bishop_on_light_squares) {
                     const corner_bonus = get_corner_distance_bonus(@intCast(black_king_sq), true);
-                    endgame_bonus += corner_bonus;
+                    endgame_bonus += @divTrunc(corner_bonus * nnue.hce_corner_pct, 100);
                 } else {
                     const corner_bonus = get_corner_distance_bonus(@intCast(black_king_sq), false);
-                    endgame_bonus += corner_bonus;
+                    endgame_bonus += @divTrunc(corner_bonus * nnue.hce_corner_pct, 100);
                 }
             } else {
                 // Negative because we want enemy king on edge
-                endgame_bonus -= CENTER_CONTROL[black_king_sq];
+                endgame_bonus -= @divTrunc(CENTER_CONTROL[black_king_sq] * nnue.hce_edge_pct, 100);
             }
 
             // Bring kings closer in winning endgames
             const distance = king_distance(@intCast(white_king_sq), @intCast(black_king_sq));
             // Closer is better
-            endgame_bonus -= @as(i32, @intCast(distance)) * 5;
+            endgame_bonus -= @divTrunc(@as(i32, @intCast(distance)) * 5 * nnue.hce_kingdist_pct, 100);
         }
 
         // Black winning endgame
@@ -466,19 +493,19 @@ pub const Evaluator = struct {
                 // Bishop + Knight mate: drive king to correct corner Negative because it's good for Black
                 if (bishop_on_light_squares) {
                     const corner_bonus = get_corner_distance_bonus(@intCast(white_king_sq), true);
-                    endgame_bonus -= corner_bonus;
+                    endgame_bonus -= @divTrunc(corner_bonus * nnue.hce_corner_pct, 100);
                 } else {
                     const corner_bonus = get_corner_distance_bonus(@intCast(white_king_sq), false);
-                    endgame_bonus -= corner_bonus;
+                    endgame_bonus -= @divTrunc(corner_bonus * nnue.hce_corner_pct, 100);
                 }
             } else {
                 // General winning endgame: bring kings closer
-                endgame_bonus += CENTER_CONTROL[white_king_sq];
+                endgame_bonus += @divTrunc(CENTER_CONTROL[white_king_sq] * nnue.hce_edge_pct, 100);
             }
 
             // Bring kings closer
             const distance = king_distance(@intCast(white_king_sq), @intCast(black_king_sq));
-            endgame_bonus += @as(i32, @intCast(distance)) * 5;
+            endgame_bonus += @divTrunc(@as(i32, @intCast(distance)) * 5 * nnue.hce_kingdist_pct, 100);
         }
 
         return endgame_bonus;
