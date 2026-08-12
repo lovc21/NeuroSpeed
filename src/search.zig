@@ -172,6 +172,15 @@ pub const Params = struct {
     qs_delta: i32 = 150, // qsearch delta-pruning margin
     se_depth: i32 = 8, // singular-extension min depth (LTC-scaler: bullet test)
     iir_depth: i32 = 4, // IIR min depth (LTC-scaler: bullet test)
+    // Ablation toggles for the thesis component tests (0 = feature ON =
+    // default behaviour, bit-identical; 1 = component disabled). Exposed as
+    // UCI spin options like every other Params field.
+    dis_pvs: i32 = 0, // 1: search every move with a full window (no scout)
+    dis_qsearch: i32 = 0, // 1: static eval at the horizon instead of qsearch
+    dis_nmp: i32 = 0, // 1: no null-move pruning
+    dis_ordhist: i32 = 0, // 1: no killer/history terms in move ordering
+    dis_counter: i32 = 0, // 1: no countermove term in move ordering
+    dis_conthist: i32 = 0, // 1: no continuation-history term in move ordering
 };
 
 // Late Move Reduction table. Comptime-initialized with the default formula
@@ -585,6 +594,8 @@ pub const Search = struct {
 
         // Quiescence search
         if (depth_in == 0) {
+            // Ablation: raw static eval at the horizon (no capture resolution).
+            if (params.dis_qsearch != 0) return eval.global_evaluator.eval(board, color, mut_alpha, beta);
             return self.quiescence(board, mut_alpha, beta, 0, color);
         }
 
@@ -755,7 +766,7 @@ pub const Search = struct {
         }
 
         // Null Move Pruning (NMP)
-        if (do_null and !is_pv_node and !in_check and !skip_move and depth >= 3) {
+        if (do_null and params.dis_nmp == 0 and !is_pv_node and !in_check and !skip_move and depth >= 3) {
             const has_non_pawn = if (color == .White)
                 (board.pieces[types.Piece.WHITE_KNIGHT.toU4()] |
                     board.pieces[types.Piece.WHITE_BISHOP.toU4()] |
@@ -1024,17 +1035,26 @@ pub const Search = struct {
                     }
                 }
 
-                // LMR or PVS null window search (possibly at reduced depth)
-                score = -self.negamax(board, new_depth - reduction, -alpha - 1, -alpha, true, move, opponent);
+                if (params.dis_pvs != 0) {
+                    // Ablation: no scout windows — every move gets a full
+                    // window (LMR depth reduction kept, verified full-depth).
+                    score = -self.negamax(board, new_depth - reduction, -adj_beta, -alpha, true, move, opponent);
+                    if (reduction > 0 and score > alpha) {
+                        score = -self.negamax(board, new_depth, -adj_beta, -alpha, true, move, opponent);
+                    }
+                } else {
+                    // LMR or PVS null window search (possibly at reduced depth)
+                    score = -self.negamax(board, new_depth - reduction, -alpha - 1, -alpha, true, move, opponent);
 
-                // If reduced search failed high, re-search at full depth null window
-                if (reduction > 0 and score > alpha) {
-                    score = -self.negamax(board, new_depth, -alpha - 1, -alpha, true, move, opponent);
-                }
+                    // If reduced search failed high, re-search at full depth null window
+                    if (reduction > 0 and score > alpha) {
+                        score = -self.negamax(board, new_depth, -alpha - 1, -alpha, true, move, opponent);
+                    }
 
-                // If null window failed high, re-search with full window (PVS)
-                if (score > alpha and score < adj_beta) {
-                    score = -self.negamax(board, new_depth, -adj_beta, -alpha, true, move, opponent);
+                    // If null window failed high, re-search with full window (PVS)
+                    if (score > alpha and score < adj_beta) {
+                        score = -self.negamax(board, new_depth, -adj_beta, -alpha, true, move, opponent);
+                    }
                 }
             }
 

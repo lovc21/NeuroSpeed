@@ -143,39 +143,52 @@ pub inline fn score_move(board: *types.Board, move_list: *lists.MoveList, score_
 
         //5. Quiet moves gets a score of 0
         else {
+            // Ablation toggles (thesis component tests): dis_ordhist skips the
+            // killer + history terms, dis_counter the countermove term,
+            // dis_conthist the continuation-history terms. All 0 by default.
             // score first killer move
-            if (std.meta.eql(move_list.moves[i], search.global_search.killer_moves[0][search.global_search.ply])) {
+            if (search.params.dis_ordhist == 0 and
+                std.meta.eql(move_list.moves[i], search.global_search.killer_moves[0][search.global_search.ply]))
+            {
                 score = SCORE_KILLER;
                 // score second killer move
-            } else if (std.meta.eql(move_list.moves[i], search.global_search.killer_moves[1][search.global_search.ply])) {
+            } else if (search.params.dis_ordhist == 0 and
+                std.meta.eql(move_list.moves[i], search.global_search.killer_moves[1][search.global_search.ply]))
+            {
                 score = SCORE_KILLER_2;
                 // score countermove
-            } else if (!countermove.is_empty() and moves_equal(move, countermove)) {
+            } else if (search.params.dis_counter == 0 and
+                !countermove.is_empty() and moves_equal(move, countermove))
+            {
                 score = SCORE_COUNTERMOVE;
                 // score history + continuation history
             } else {
-                score = search.global_search.history_moves[move.from][move.to];
+                if (search.params.dis_ordhist == 0) {
+                    score = search.global_search.history_moves[move.from][move.to];
+                }
 
                 // Add continuation history (counter + follow) for move ordering
-                const cur_pt_opt = board.get_piece_type_at(move.from);
-                if (cur_pt_opt) |cur_pt_enum| {
-                    const cur_pt: u4 = @intCast(@intFromEnum(cur_pt_enum));
-                    const ply = search.global_search.ply;
-                    if (ply >= 1) {
-                        const sm = search.global_search.stack_moves[ply - 1];
-                        if (!sm.is_empty()) {
-                            const pp = search.global_search.stack_pieces[ply - 1];
-                            if (pp < 6) {
-                                score += search.global_search.sc_counter_table[pp][sm.to][cur_pt][move.to];
+                if (search.params.dis_conthist == 0) {
+                    const cur_pt_opt = board.get_piece_type_at(move.from);
+                    if (cur_pt_opt) |cur_pt_enum| {
+                        const cur_pt: u4 = @intCast(@intFromEnum(cur_pt_enum));
+                        const ply = search.global_search.ply;
+                        if (ply >= 1) {
+                            const sm = search.global_search.stack_moves[ply - 1];
+                            if (!sm.is_empty()) {
+                                const pp = search.global_search.stack_pieces[ply - 1];
+                                if (pp < 6) {
+                                    score += search.global_search.sc_counter_table[pp][sm.to][cur_pt][move.to];
+                                }
                             }
                         }
-                    }
-                    if (ply >= 2) {
-                        const sm2 = search.global_search.stack_moves[ply - 2];
-                        if (!sm2.is_empty()) {
-                            const gpp = search.global_search.stack_pieces[ply - 2];
-                            if (gpp < 6) {
-                                score += search.global_search.sc_follow_table[gpp][sm2.to][cur_pt][move.to];
+                        if (ply >= 2) {
+                            const sm2 = search.global_search.stack_moves[ply - 2];
+                            if (!sm2.is_empty()) {
+                                const gpp = search.global_search.stack_pieces[ply - 2];
+                                if (gpp < 6) {
+                                    score += search.global_search.sc_follow_table[gpp][sm2.to][cur_pt][move.to];
+                                }
                             }
                         }
                     }
