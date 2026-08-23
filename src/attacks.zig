@@ -1,7 +1,7 @@
 const print = std.debug.print;
 const types = @import("types.zig");
 const std = @import("std");
-const tables = @import("tables.zig");
+const tabeles = @import("tabeles.zig");
 const util = @import("util.zig");
 const bitboard = @import("bitboard.zig");
 
@@ -37,35 +37,29 @@ pub inline fn pawn_attacks_from_bitboard(comptime color: types.Color, bb: types.
         ((bb & ~(@intFromEnum(types.MaskFile.AFILE))) >> 9) | ((bb & ~(@intFromEnum(types.MaskFile.HFILE))) >> 7);
 }
 
-pub var pawn_attacks: [2][64]u64 = undefined;
-pub var pseudo_legal_attacks: [6][64]u64 = undefined;
+// Comptime consts (rodata): pawn table pair + empty-board pseudo-legal
+// attacks. The Pawn row is all-zero — pawn attacks go through pawn_attacks,
+// never piece_attacks.
+pub const pawn_attacks: [2][64]u64 = .{
+    tabeles.White_pawn_attacks_tabele,
+    tabeles.Black_pawn_attacks_tabele,
+};
 
-pub fn init_pseudo_legal() void {
-    pawn_attacks[0] = tables.white_pawn_attacks;
-    pawn_attacks[1] = tables.black_pawn_attacks;
-
-    const knight_i = @intFromEnum(types.PieceType.Knight);
-    const king_i = @intFromEnum(types.PieceType.King);
-    pseudo_legal_attacks[knight_i] = tables.knight_attacks;
-    pseudo_legal_attacks[king_i] = tables.king_attacks;
-
-    const rook_i = @intFromEnum(types.PieceType.Rook);
-    const bishop_i = @intFromEnum(types.PieceType.Bishop);
-    const queen_i = @intFromEnum(types.PieceType.Queen);
-
+pub const pseudo_legal_attacks: [6][64]u64 = blk: {
+    @setEvalBranchQuota(1_000_000);
+    var t: [6][64]u64 = .{.{0} ** 64} ** 6;
+    t[@intFromEnum(types.PieceType.Knight)] = tabeles.Knight_attackes_tabele;
+    t[@intFromEnum(types.PieceType.King)] = tabeles.King_attackes_tabele;
     for (0..64) |s| {
         const sq: u8 = @intCast(s);
-        const occ = 0;
-
-        // sliding attacks
-        const r_att = get_rook_attacks_for_init(sq, occ);
-        const b_att = get_bishop_attacks_for_init(sq, occ);
-
-        pseudo_legal_attacks[rook_i][s] = r_att;
-        pseudo_legal_attacks[bishop_i][s] = b_att;
-        pseudo_legal_attacks[queen_i][s] = r_att | b_att;
+        const r_att = get_rook_attacks_for_init(sq, 0);
+        const b_att = get_bishop_attacks_for_init(sq, 0);
+        t[@intFromEnum(types.PieceType.Rook)][s] = r_att;
+        t[@intFromEnum(types.PieceType.Bishop)][s] = b_att;
+        t[@intFromEnum(types.PieceType.Queen)][s] = r_att | b_att;
     }
-}
+    break :blk t;
+};
 
 // use this for pawn attacks
 pub inline fn pawn_attacks_from_square(s: usize, c: types.Color) u64 {
@@ -152,7 +146,7 @@ pub fn bishop_attack_mask_from_bitboard(bb: types.Bitboard) types.Bitboard {
 
     return attacks;
 }
-// Mostly copied and improved from https://github.com/SnowballSH/Avalanche/blob/c44569afbee44716e18a9698430c1016438d3874/src/chess/tables.zig#L80C1-L231C77
+// Mostly copied and improved from https://github.com/SnowballSH/Avalanche/blob/c44569afbee44716e18a9698430c1016438d3874/src/chess/tabeles.zig#L80C1-L231C77
 inline fn reverse64(b: u64) u64 {
     var x: u64 = b;
     x = ((x & 0x5555555555555555) << 1) | ((x >> 1) & 0x5555555555555555);
@@ -188,9 +182,9 @@ pub var rook_attacks_table: [64][4096]types.Bitboard align(64) = std.mem.zeroes(
 
 pub inline fn init_rook_attacks() void {
     for (0..64) |square| {
-        const mask = tables.rook_attack_masks[square];
-        const relevantBits = tables.rook_index_bits[square];
-        const magic = tables.rook_magics[square];
+        const mask = tabeles.Rook_attackes_tabele[square];
+        const relevantBits = tabeles.Rook_index_bit[square];
+        const magic = tabeles.rook_magics[square];
 
         const shift: u6 = @truncate(64 - relevantBits);
         const sq6 = @as(u8, @intCast(square));
@@ -211,9 +205,9 @@ pub inline fn init_rook_attacks() void {
 }
 
 pub inline fn get_rook_attacks(square: u6, occ: u64) u64 {
-    const mask: u64 = tables.rook_attack_masks[square];
-    const magic: u64 = tables.rook_magics[square];
-    const shift: u6 = @intCast(64 - tables.rook_index_bits[square]);
+    const mask: u64 = tabeles.Rook_attackes_tabele[square];
+    const magic: u64 = tabeles.rook_magics[square];
+    const shift: u6 = @intCast(64 - tabeles.Rook_index_bit[square]);
     const relevant: u64 = occ & mask;
     const idx: usize = @intCast((relevant *% magic) >> shift);
 
@@ -281,9 +275,9 @@ pub var bishop_attacks_table: [64][512]types.Bitboard align(64) = std.mem.zeroes
 
 pub inline fn init_bishop_attacks() void {
     for (0..64) |square| {
-        const mask = tables.bishop_attack_masks[square];
-        const relevantBits = tables.bishop_index_bits[square];
-        const magic = tables.bishop_magics[square];
+        const mask = tabeles.Bishops_attackes_tabele[square];
+        const relevantBits = tabeles.Bishop_index_bit[square];
+        const magic = tabeles.bishop_magics[square];
         const shift: u6 = @truncate(64 - relevantBits);
         const sq6 = @as(u8, @intCast(square));
 
@@ -326,9 +320,9 @@ pub inline fn init_bishop_attacks() void {
 }
 
 pub inline fn get_bishop_attacks(square: u6, occ: u64) u64 {
-    const mask: u64 = tables.bishop_attack_masks[square];
-    const magic: u64 = tables.bishop_magics[square];
-    const shift: u6 = @intCast(64 - tables.bishop_index_bits[square]);
+    const mask: u64 = tabeles.Bishops_attackes_tabele[square];
+    const magic: u64 = tabeles.bishop_magics[square];
+    const shift: u6 = @intCast(64 - tabeles.Bishop_index_bit[square]);
     const relevant: u64 = occ & mask;
     const idx: usize = @intCast((relevant *% magic) >> shift);
     return bishop_attacks_table[square][idx];
@@ -358,11 +352,10 @@ pub fn piece_attacks(
     }
 }
 
-const movegen = @import("movegen.zig");
-
 pub fn init_attacks() void {
+    // Only the magic tables need runtime init (2.25 MB, BSS — comptime-baking
+    // them would bloat the binary for zero fold benefit). Everything else
+    // (pawn/pseudo-legal/between/line/ray tables) is comptime rodata now.
     init_bishop_attacks();
     init_rook_attacks();
-    init_pseudo_legal();
-    movegen.init();
 }

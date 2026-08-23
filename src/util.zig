@@ -170,7 +170,7 @@ pub fn perft_detailed(comptime color: types.Color, board: *types.Board, depth: u
     if (depth == 1) {
         for (0..move_list.count) |i| {
             const move = move_list.moves[i];
-            const undo = move_gen.make_move_search(board, move);
+            const undo = move_gen.make_move_search(board, move, color);
 
             stats.nodes += 1;
 
@@ -195,15 +195,15 @@ pub fn perft_detailed(comptime color: types.Color, board: *types.Board, depth: u
                 if (opponent_moves.count == 0) stats.checkmates += 1;
             }
 
-            move_gen.unmake_move_search(board, move, undo);
+            move_gen.unmake_move_search(board, move, undo, color);
         }
     } else {
         for (0..move_list.count) |i| {
             const move = move_list.moves[i];
-            const undo = move_gen.make_move_search(board, move);
+            const undo = move_gen.make_move_search(board, move, color);
             const sub_stats = perft_detailed(opponent_side, board, depth - 1);
             stats.add(sub_stats);
-            move_gen.unmake_move_search(board, move, undo);
+            move_gen.unmake_move_search(board, move, undo, color);
         }
     }
 
@@ -228,9 +228,9 @@ pub fn perft_legal(comptime color: types.Color, board: *types.Board, depth: u8) 
         const move = move_list.moves[i];
 
         // Fast play/undo: ~4 bytes of undo info instead of 200-byte board copy
-        const undo = move_gen.make_move_perft(board, move);
+        const undo = move_gen.make_move_perft(board, move, color);
         nodes += perft_legal(opponent_side, board, depth - 1);
-        move_gen.unmake_move_perft(board, move, undo);
+        move_gen.unmake_move_perft(board, move, undo, color);
     }
 
     return nodes;

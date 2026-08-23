@@ -10,7 +10,7 @@ const tt_mod = @import("tt.zig");
 const zobrist = @import("zobrist.zig");
 const movegen = @import("movegen.zig");
 const nnue = @import("nnue.zig");
-const globals = @import("globals.zig");
+const clock = @import("clock.zig");
 const Move = move_gen.Move;
 
 pub var global_search: Search = undefined;
@@ -34,7 +34,7 @@ var stdout_fw: ?std.Io.File.Writer = null;
 fn print(comptime fmt: []const u8, args: anytype) void {
     if (silent) return;
     if (stdout_fw == null)
-        stdout_fw = std.Io.File.stdout().writerStreaming(globals.io, &stdout_buf);
+        stdout_fw = std.Io.File.stdout().writerStreaming(clock.io, &stdout_buf);
     const w = &stdout_fw.?.interface;
     w.print(fmt, args) catch return;
     // Flush per call: UCI GUIs need each info/bestmove line delivered
@@ -68,6 +68,8 @@ const MATE_VALUE: i32 = 32000;
 const MATE_THRESHOLD: i32 = MATE_VALUE - @as(i32, MAX_PLY); // |score| above => a mate
 const MAX_PLY: usize = 128;
 const MAX_QUIESCENCE_DEPTH: i8 = 16;
+// Qsearch delta-pruning piece values (P, N, B, R, Q, K).
+const QS_PIECE_VALUES = [_]i32{ 100, 320, 330, 500, 900, 10000 };
 
 // ===========================================================================
 // Pawn correction history: a table of how much the static eval has historically
@@ -229,7 +231,8 @@ pub const Search = struct {
     best_score: i32 = 0, // stm-relative cp of the deepest completed iteration (for datagen)
     stop_on_time: bool = false,
     stop: bool = false,
-    timer: globals.Timer = undefined,
+    timer: clock.Timer = undefined,
+    hard_deadline: clock.Deadline = .never,
     max_depth: u32 = 64,
     nodes: u64 = 0,
     ply: u16 = 0,
@@ -341,11 +344,8 @@ pub const Search = struct {
         // 1023 mask ≈ 0.7ms at 1.4M NPS (Stormphrax polls every 1024 nodes);
         // 2047 overshot sub-5ms hard limits near the flag at 15+0.
         if ((self.nodes & 1023) == 0) {
-            if (self.hard_limit > 0) {
-                const elapsed = self.timer.read() / std.time.ns_per_ms;
-                if (elapsed >= self.hard_limit) {
-                    self.stop = true;
-                }
+            if (self.hard_limit > 0 and self.hard_deadline.expired()) {
+                self.stop = true;
             }
             if (self.hard_nodes > 0 and self.nodes >= self.hard_nodes) {
                 self.stop = true;
@@ -493,7 +493,7 @@ pub const Search = struct {
         var score_list: lists.ScoreList = .{};
         move_scores.score_move(board, &move_list, &score_list, tt_move, Move.empty());
 
-        const piece_values = [_]i32{ 100, 320, 330, 500, 900, 10000 }; // P, N, B, R, Q, K
+        const piece_values = QS_PIECE_VALUES; // P, N, B, R, Q, K
 
         var best_move_q: Move = Move.empty();
         for (0..move_list.count) |i| {
@@ -526,7 +526,7 @@ pub const Search = struct {
             self.ply += 1;
 
             // Legal movegen guarantees all moves are legal
-            const undo = move_gen.make_move_search(board, move);
+            const undo = move_gen.make_move_search(board, move, color);
 
             // Hide the child's TT-probe cache miss behind its entry work.
             if (global_tt) |*tt| tt.prefetch(board.hash);
@@ -534,7 +534,7 @@ pub const Search = struct {
             const score = -self.quiescence(board, -adj_beta, -alpha, depth - 1, opponent);
 
             self.ply -= 1;
-            move_gen.unmake_move_search(board, move, undo);
+            move_gen.unmake_move_search(board, move, undo, color);
 
             if (self.stop) return 0;
 
@@ -919,7 +919,7 @@ pub const Search = struct {
             self.ply += 1;
 
             // Legal movegen guarantees all moves are legal
-            const undo = move_gen.make_move_search(board, move);
+            const undo = move_gen.make_move_search(board, move, color);
             legal_moves += 1;
 
             // Hide the child's TT-probe cache miss behind its entry work.
@@ -935,7 +935,7 @@ pub const Search = struct {
             // Futility pruning: skip quiet non-check moves that can't raise alpha
             if (futility_pruning and legal_moves > 1 and is_quiet and !gives_check) {
                 self.ply -= 1;
-                move_gen.unmake_move_search(board, move, undo);
+                move_gen.unmake_move_search(board, move, undo, color);
                 continue;
             }
 
@@ -950,7 +950,7 @@ pub const Search = struct {
                 )));
                 if (quiet_count > lmp_threshold) {
                     self.ply -= 1;
-                    move_gen.unmake_move_search(board, move, undo);
+                    move_gen.unmake_move_search(board, move, undo, color);
                     continue;
                 }
             }
@@ -985,7 +985,7 @@ pub const Search = struct {
                     full_hist < -params.histprune_mult * @as(i32, depth))
                 {
                     self.ply -= 1;
-                    move_gen.unmake_move_search(board, move, undo);
+                    move_gen.unmake_move_search(board, move, undo, color);
                     continue;
                 }
             }
@@ -1060,7 +1060,7 @@ pub const Search = struct {
 
             self.ply -= 1;
 
-            move_gen.unmake_move_search(board, move, undo);
+            move_gen.unmake_move_search(board, move, undo, color);
 
             if (self.stop) return 0;
 
@@ -1196,6 +1196,7 @@ pub const Search = struct {
         self.timer = .start();
         self.soft_limit = soft_limit_ms;
         self.hard_limit = hard_limit_ms;
+        self.hard_deadline = if (hard_limit_ms > 0) .afterMs(hard_limit_ms) else .never;
         self.ply = 0; // Reset ply counter
         self.clear_pv_table();
         self.best_move = Move.empty();

@@ -5,7 +5,7 @@ pub const MoveList = struct {
     moves: [255]Move = undefined,
     count: usize = 0,
 
-    pub fn append(self: *MoveList, m: Move) void {
+    pub inline fn append(self: *MoveList, m: Move) void {
         self.moves[self.count] = m;
         self.count += 1;
     }
@@ -15,7 +15,7 @@ pub const ScoreList = struct {
     scores: [255]i32 = undefined,
     count: usize = 0,
 
-    pub fn append(self: *ScoreList, s: i32) void {
+    pub inline fn append(self: *ScoreList, s: i32) void {
         self.scores[self.count] = s;
         self.count += 1;
     }

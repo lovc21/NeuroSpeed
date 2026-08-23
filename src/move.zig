@@ -88,7 +88,9 @@ pub const PerftUndo = struct {
 };
 
 /// Fast make_move for perft only. No zobrist, no eval, maintains mailbox.
-pub inline fn make_move_perft(board: *types.Board, move: Move) PerftUndo {
+/// `color` is the mover's side (== board.side at entry), comptime so every
+/// color-derived branch below folds.
+pub inline fn make_move_perft(board: *types.Board, move: Move, comptime color: types.Color) PerftUndo {
     const from = move.from;
     const to = move.to;
     const flags = move.flags;
@@ -96,7 +98,7 @@ pub inline fn make_move_perft(board: *types.Board, move: Move) PerftUndo {
     // O(1) piece lookup from mailbox
     const piece = board.board[from];
     const piece_idx = @intFromEnum(piece);
-    const moving_white = piece_idx < 6;
+    const moving_white = comptime color == types.Color.White;
 
     // Save captured piece BEFORE overwriting mailbox
     var undo = PerftUndo{
@@ -177,24 +179,25 @@ pub inline fn make_move_perft(board: *types.Board, move: Move) PerftUndo {
     update_castling_rights(board, from, to);
 
     // Flip side
-    board.side = if (board.side == types.Color.White) types.Color.Black else types.Color.White;
+    board.side = comptime if (moving_white) types.Color.Black else types.Color.White;
 
     return undo;
 }
 
 /// Fast unmake_move for perft only. Reverses make_move_perft.
-pub inline fn unmake_move_perft(board: *types.Board, move: Move, undo: PerftUndo) void {
+/// `color` is the MOVER's side (board.side is its opponent at entry).
+pub inline fn unmake_move_perft(board: *types.Board, move: Move, undo: PerftUndo, comptime color: types.Color) void {
     const from = move.from;
     const to = move.to;
     const flags = move.flags;
 
     // Flip side back
-    board.side = if (board.side == types.Color.White) types.Color.Black else types.Color.White;
+    board.side = color;
 
     // Get the piece on target (may be promoted piece)
     var piece = board.board[to];
     var piece_idx = @intFromEnum(piece);
-    const moving_white = @intFromEnum(board.side) == 0;
+    const moving_white = comptime color == types.Color.White;
 
     // Undo castling rook movement
     if (flags == types.MoveFlags.OO or flags == types.MoveFlags.OOO) {
@@ -273,7 +276,9 @@ pub const SearchUndo = struct {
 
 /// Make move for search path. Like make_move_perft but also updates Zobrist hash and eval.
 /// Uses O(1) mailbox lookup instead of scanning bitboards. Returns SearchUndo for unmake.
-pub inline fn make_move_search(board: *types.Board, move: Move) SearchUndo {
+/// `color` is the mover's side (== board.side at entry), comptime so every
+/// color-derived branch below folds.
+pub inline fn make_move_search(board: *types.Board, move: Move, comptime color: types.Color) SearchUndo {
     const from = move.from;
     const to = move.to;
     const flags = move.flags;
@@ -281,7 +286,7 @@ pub inline fn make_move_search(board: *types.Board, move: Move) SearchUndo {
     // O(1) piece lookup from mailbox
     const piece = board.board[from];
     const piece_idx = @intFromEnum(piece);
-    const moving_white = piece_idx < 6;
+    const moving_white = comptime color == types.Color.White;
     const pi = zobrist.piece_index(piece);
 
     // Save undo info
@@ -439,7 +444,7 @@ pub inline fn make_move_search(board: *types.Board, move: Move) SearchUndo {
     board.hash ^= zobrist.side_key;
 
     // Flip side
-    board.side = if (board.side == types.Color.White) types.Color.Black else types.Color.White;
+    board.side = comptime if (moving_white) types.Color.Black else types.Color.White;
 
     // Incremental NNUE accumulator push (search path only; gated by acc_active).
     // undo.captured is final here (EN_PASSANT replaced it with the taken pawn).
@@ -484,7 +489,8 @@ pub inline fn make_move_search(board: *types.Board, move: Move) SearchUndo {
 
 /// Unmake move for search path. Reverses make_move_search using saved undo info.
 /// Restores hash and eval from undo struct instead of re-XORing.
-pub inline fn unmake_move_search(board: *types.Board, move: Move, undo: SearchUndo) void {
+/// `color` is the MOVER's side (board.side is its opponent at entry).
+pub inline fn unmake_move_search(board: *types.Board, move: Move, undo: SearchUndo, comptime color: types.Color) void {
     const from = move.from;
     const to = move.to;
     const flags = move.flags;
@@ -495,12 +501,12 @@ pub inline fn unmake_move_search(board: *types.Board, move: Move, undo: SearchUn
     }
 
     // Flip side back
-    board.side = if (board.side == types.Color.White) types.Color.Black else types.Color.White;
+    board.side = color;
 
     // Get the piece on target (may be promoted piece)
     var piece = board.board[to];
     var piece_idx = @intFromEnum(piece);
-    const moving_white = @intFromEnum(board.side) == 0;
+    const moving_white = comptime color == types.Color.White;
 
     // Undo castling rook movement
     if (flags == types.MoveFlags.OO or flags == types.MoveFlags.OOO) {
@@ -566,4 +572,24 @@ pub inline fn unmake_move_search(board: *types.Board, move: Move, undo: SearchUn
     board.halfmove = undo.halfmove;
     board.hash = undo.hash;
     eval.global_evaluator = undo.evaluator;
+}
+
+/// Runtime-color dispatchers for callers that don't hold the mover's side at
+/// comptime (UCI move playing, datagen, tests). Search and perft call the
+/// comptime-color versions directly.
+pub fn make_move_search_rt(board: *types.Board, move: Move) SearchUndo {
+    return switch (board.side) {
+        .White => make_move_search(board, move, .White),
+        .Black => make_move_search(board, move, .Black),
+        .both => unreachable,
+    };
+}
+
+pub fn unmake_move_search_rt(board: *types.Board, move: Move, undo: SearchUndo) void {
+    // At unmake entry board.side is the opponent of the mover.
+    switch (board.side) {
+        .White => unmake_move_search(board, move, undo, .Black),
+        .Black => unmake_move_search(board, move, undo, .White),
+        .both => unreachable,
+    }
 }

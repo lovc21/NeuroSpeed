@@ -1,6 +1,6 @@
 const std = @import("std");
 const types = @import("types.zig");
-const globals = @import("globals.zig");
+const clock = @import("clock.zig");
 
 const Board = types.Board;
 const Color = types.Color;
@@ -121,6 +121,10 @@ inline fn king_mirror(board: *const Board, persp_white: bool) bool {
 /// FROM that perspective (vertical rank flip for Black) — the bucket layout is
 /// rank-dependent, so Black must use ksq^56 (file-only buckets masked this bug).
 inline fn king_bucket(board: *const Board, persp_white: bool) usize {
+    // Mirror-only shipping config: the bucket is provably always 0, so skip
+    // the ctz/xor/table load in every apply/refresh. Flipping
+    // NUM_INPUT_BUCKETS back on restores the full computation.
+    if (comptime NUM_INPUT_BUCKETS == 1) return 0;
     const kbb = if (persp_white) board.pieces[5] else board.pieces[13];
     const ksq: usize = @ctz(kbb);
     const rel: usize = if (persp_white) ksq else ksq ^ 56;
@@ -268,7 +272,7 @@ fn apply_fused(
 }
 
 /// Rebuild a single perspective's accumulator from scratch under (mirror, bucket).
-fn refresh_one(acc: *Accumulator, board: *const Board, persp_white: bool, m: bool, b: usize) void {
+fn refresh_one(acc: *Accumulator, board: *const Board, comptime persp_white: bool, m: bool, b: usize) void {
     const ci: usize = if (persp_white) 0 else 1;
     acc.mirror[ci] = m;
     acc.bucket[ci] = b;
@@ -373,7 +377,9 @@ pub fn apply(board: *const Board, delta: FeatDelta) void {
         const ci: usize = if (pw) 0 else 1;
         const m = king_mirror(board, pw);
         const b = king_bucket(board, pw);
-        if (m != srcb.mirror[ci] or b != srcb.bucket[ci]) {
+        // Bucket comparison comptime-folds away in the 1-bucket config.
+        const bucket_changed = NUM_INPUT_BUCKETS > 1 and b != srcb.bucket[ci];
+        if (m != srcb.mirror[ci] or bucket_changed) {
             // Refresh boundary — must compute now (needs this board). Anchor.
             refresh_one(dstb, board, pw, m, b);
             dstb.computed[ci] = true;
@@ -397,7 +403,7 @@ fn apply_delta_one(
     dst: *[HIDDEN]i16,
     src: *const [HIDDEN]i16,
     delta: FeatDelta,
-    persp_white: bool,
+    comptime persp_white: bool,
     m: bool,
     b: usize,
 ) void {
@@ -432,11 +438,11 @@ fn apply_delta_one(
 /// nearest computed ancestor, then replay each deferred delta forward,
 /// memoizing every intermediate level so later evals are O(1). The root and
 /// every refresh are computed anchors, so the search always terminates.
-fn ensure_computed(sp: usize, ci: usize) void {
+fn ensure_computed(sp: usize, comptime ci: usize) void {
     if (acc_stack[sp].computed[ci]) return;
     var anchor = sp;
     while (!acc_stack[anchor].computed[ci]) anchor -= 1;
-    const pw = (ci == 0);
+    const pw = comptime (ci == 0);
     var l = anchor + 1;
     while (l <= sp) : (l += 1) {
         const lvl = &acc_stack[l];
@@ -727,7 +733,7 @@ pub fn load_bytes(data: []const u8) !void {
 
 /// Load a net from a file on disk (used until the net is `@embedFile`d).
 pub fn load_file(allocator: std.mem.Allocator, path: []const u8) !void {
-    const data = try std.Io.Dir.cwd().readFileAlloc(globals.io, path, allocator, .limited(64 << 20));
+    const data = try std.Io.Dir.cwd().readFileAlloc(clock.io, path, allocator, .limited(64 << 20));
     defer allocator.free(data);
     try load_bytes(data);
 }
@@ -892,7 +898,7 @@ pub const AccumulatorS = struct {
     }
 };
 
-fn refresh_one_s(acc: *AccumulatorS, board: *const Board, persp_white: bool, m: bool, b: usize) void {
+fn refresh_one_s(acc: *AccumulatorS, board: *const Board, comptime persp_white: bool, m: bool, b: usize) void {
     const ci: usize = if (persp_white) 0 else 1;
     acc.mirror[ci] = m;
     acc.bucket[ci] = b;
@@ -907,7 +913,7 @@ fn refresh_one_s(acc: *AccumulatorS, board: *const Board, persp_white: bool, m: 
     }
 }
 
-fn apply_delta_one_s(dst: *[HIDDEN_S]i16, src: *const [HIDDEN_S]i16, delta: FeatDelta, persp_white: bool, m: bool, b: usize) void {
+fn apply_delta_one_s(dst: *[HIDDEN_S]i16, src: *const [HIDDEN_S]i16, delta: FeatDelta, comptime persp_white: bool, m: bool, b: usize) void {
     var subs: [2]*const [HIDDEN_S]i16 = undefined;
     var adds: [2]*const [HIDDEN_S]i16 = undefined;
     var k: usize = 0;
@@ -923,11 +929,11 @@ fn apply_delta_one_s(dst: *[HIDDEN_S]i16, src: *const [HIDDEN_S]i16, delta: Feat
 
 pub var acc_stack_s: [STACK_SIZE]AccumulatorS = undefined;
 
-fn ensure_computed_s(sp: usize, ci: usize) void {
+fn ensure_computed_s(sp: usize, comptime ci: usize) void {
     if (acc_stack_s[sp].computed[ci]) return;
     var anchor = sp;
     while (!acc_stack_s[anchor].computed[ci]) anchor -= 1;
-    const pw = (ci == 0);
+    const pw = comptime (ci == 0);
     var l = anchor + 1;
     while (l <= sp) : (l += 1) {
         const lvl = &acc_stack_s[l];

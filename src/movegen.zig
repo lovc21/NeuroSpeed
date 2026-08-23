@@ -3,55 +3,62 @@ const types = @import("types.zig");
 const attacks = @import("attacks.zig");
 const util = @import("util.zig");
 
-// ============================================================================
-// Lookup Tables for Legal Move Generation (Gigantua-style)
-// ============================================================================
-
 /// between_table[sq1][sq2] = bitboard of squares strictly between sq1 and sq2
 /// (excludes both endpoints). Zero if not on same rank/file/diagonal.
-pub var between_table: [64][64]u64 = undefined;
+/// Comptime const: lives in rodata, so the optimizer can hoist loads freely
+/// across the stores in the hot movegen loops (a mutable global can alias).
+pub const between_table: [64][64]u64 = blk: {
+    @setEvalBranchQuota(2_000_000);
+    var t: [64][64]u64 = undefined;
+    for (0..64) |sq1| {
+        for (0..64) |sq2| {
+            t[sq1][sq2] = compute_between(@intCast(sq1), @intCast(sq2));
+        }
+    }
+    break :blk t;
+};
 
 /// line_table[sq1][sq2] = bitboard of the full line through sq1 and sq2
 /// (includes both endpoints and extends to board edges).
 /// Zero if not on same rank/file/diagonal.
-pub var line_table: [64][64]u64 = undefined;
+pub const line_table: [64][64]u64 = blk: {
+    @setEvalBranchQuota(2_000_000);
+    var t: [64][64]u64 = undefined;
+    for (0..64) |sq1| {
+        for (0..64) |sq2| {
+            t[sq1][sq2] = compute_line(@intCast(sq1), @intCast(sq2));
+        }
+    }
+    break :blk t;
+};
 
 /// Full ray masks for each square (including edges). Used for fast-reject
 /// before doing expensive slider lookups during pin/check detection.
-pub var rook_full_mask: [64]u64 = undefined;
-pub var bishop_full_mask: [64]u64 = undefined;
-
-/// Initialize all legal movegen lookup tables. Call once at startup.
-pub fn init() void {
-    init_between_and_line_tables();
-    init_ray_masks();
-}
-
-fn init_ray_masks() void {
+pub const rook_full_mask: [64]u64 = blk: {
+    @setEvalBranchQuota(100_000);
+    var t: [64]u64 = undefined;
+    for (0..64) |sq| {
+        var m = types.mask_rank[sq / 8] | types.mask_file[sq % 8];
+        m &= ~(@as(u64, 1) << @intCast(sq)); // remove the square itself
+        t[sq] = m;
+    }
+    break :blk t;
+};
+pub const bishop_full_mask: [64]u64 = blk: {
+    @setEvalBranchQuota(100_000);
+    var t: [64]u64 = undefined;
     for (0..64) |sq| {
         const rank = sq / 8;
         const file = sq % 8;
-        rook_full_mask[sq] = types.mask_rank[rank] | types.mask_file[file];
-        // Remove the square itself
-        rook_full_mask[sq] &= ~(@as(u64, 1) << @intCast(sq));
-
-        // Bishop: compute diagonal and anti-diagonal
         const diag = @as(i8, @intCast(rank)) - @as(i8, @intCast(file)) + 7;
         const adiag = @as(i8, @intCast(rank)) + @as(i8, @intCast(file));
-        bishop_full_mask[sq] = types.mask_diagonal_nw_se[@intCast(diag)] |
+        var m = types.mask_diagonal_nw_se[@intCast(diag)] |
             types.mask_anti_diagonal_ne_sw[@intCast(adiag)];
-        bishop_full_mask[sq] &= ~(@as(u64, 1) << @intCast(sq));
+        m &= ~(@as(u64, 1) << @intCast(sq));
+        t[sq] = m;
     }
-}
-
-fn init_between_and_line_tables() void {
-    for (0..64) |sq1| {
-        for (0..64) |sq2| {
-            between_table[sq1][sq2] = compute_between(@intCast(sq1), @intCast(sq2));
-            line_table[sq1][sq2] = compute_line(@intCast(sq1), @intCast(sq2));
-        }
-    }
-}
+    break :blk t;
+};
 
 fn compute_between(sq1: u6, sq2: u6) u64 {
     const r1: i8 = @intCast(@as(u8, sq1) / 8);

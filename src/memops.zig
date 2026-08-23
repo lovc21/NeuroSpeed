@@ -1,11 +1,6 @@
-//! Fast memset override. Zig 0.16's LLVM disables the loop auto-vectorizer
-//! (miscompilation workaround), so compiler_rt's generic memset compiles down
-//! to a scalar 8-byte loop — measured at ~6% of search runtime (per-node
-//! move-list inits, TT clears). This strong export shadows compiler_rt's weak
-//! `memset` with an explicit-@Vector implementation.
 const std = @import("std");
 
-const V = 64; // bytes per vector store; lowers to 2x32B on AVX2, 4x16B on SSE2
+const V = 64;
 
 export fn memset(dest_opt: ?[*]u8, c: c_int, len: usize) callconv(.c) ?[*]u8 {
     const dest = dest_opt orelse return dest_opt;

@@ -1,17 +1,10 @@
-//! Bench: fixed-position search node counts — the engine's reproducibility
-//! fingerprint. Two entry points share this module:
-//!   - UCI `bench <depth>` command (uci.zig): all 20 positions —
-//!     `bench 6` = the identity signature used by the SPRT/validation
-//!     workflow (56024 nodes for the tri2 champion config).
-//!   - UCI bare `bench` (uci.zig): first 5 positions at depth 11 (311432
-//!     for the champion config) — a quick in-loop check.
-//! The node count is a bit-identity gate: any search/eval change that is
-//! supposed to be behavior-neutral must reproduce it exactly.
-
 const std = @import("std");
 const types = @import("types.zig");
 const bitboard = @import("bitboard.zig");
 const search = @import("search.zig");
+const util = @import("util.zig");
+const eval = @import("evaluation.zig");
+const clock = @import("clock.zig");
 
 pub const positions = [_][]const u8{
     "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
@@ -36,9 +29,6 @@ pub const positions = [_][]const u8{
     "r2qk2r/ppp1bppp/5n2/3p4/3Pn3/3B1N2/PPP2PPP/RNBQ1RK1 w kq - 0 8",
 };
 
-/// Search the first `count` bench positions to `depth` and return the total
-/// node count. The caller owns timing, TT/attack initialization and printing;
-/// the TT is cleared before every position so results are order-independent.
 pub fn run_nodes(board: *types.Board, count: usize, depth: u8) u64 {
     var total: u64 = 0;
     for (positions[0..count]) |fen| {
@@ -56,4 +46,121 @@ pub fn run_nodes(board: *types.Board, count: usize, depth: u8) u64 {
         total += search.global_search.nodes;
     }
     return total;
+}
+
+/// Timed fingerprint bench: prints "<nodes> nodes <nps> nps". Bare UCI
+/// `bench` uses (5, 11) — 311432 nodes for the champion config; `bench
+/// <depth>` uses the full 20 positions (`bench 6` = 56024).
+pub fn run(board: *types.Board, count: usize, depth: u8, out: *std.Io.Writer) !void {
+    var timer: clock.Timer = .start();
+    const total_nodes = run_nodes(board, count, depth);
+    const elapsed_ns = @max(1, timer.read());
+    const nps = @as(u128, total_nodes) * std.time.ns_per_s / elapsed_ns;
+    try out.print("{d} nodes {d} nps\n", .{ total_nodes, nps });
+}
+
+/// One component measurement: node/call count plus elapsed nanoseconds.
+pub const Measure = struct {
+    nodes: u64,
+    ns: u64,
+
+    /// Millions per second (movegen MN/s, eval M calls/s).
+    pub fn mps(m: Measure) f64 {
+        return @as(f64, @floatFromInt(m.nodes)) / @as(f64, @floatFromInt(m.ns)) * 1000.0;
+    }
+
+    /// Plain per-second rate (search NPS).
+    pub fn per_sec(m: Measure) f64 {
+        return @as(f64, @floatFromInt(m.nodes)) * std.time.ns_per_s / @as(f64, @floatFromInt(m.ns));
+    }
+};
+
+/// Move generator speed on the current position: legal perft to `depth` —
+/// fast play/undo, no zobrist/eval. Backs the UCI `perft` command.
+pub fn measure_movegen_pos(board: *types.Board, depth: u8) Measure {
+    var timer: clock.Timer = .start();
+    const nodes: u64 = if (board.side == types.Color.White)
+        util.perft_legal(types.Color.White, board, depth)
+    else
+        util.perft_legal(types.Color.Black, board, depth);
+    return .{ .nodes = nodes, .ns = @max(1, timer.read()) };
+}
+
+pub fn measure_movegen(board: *types.Board, fen: []const u8, depth: u8) !Measure {
+    try bitboard.parse_fen(fen, board);
+    return measure_movegen_pos(board, depth);
+}
+
+/// Evaluation speed on the current position: `iters` repeated full
+/// static-eval calls (no lazy cutoff). Backs the UCI `evalspeed` command.
+pub fn measure_eval_pos(board: *types.Board, iters: u64) Measure {
+    const white = board.side == types.Color.White;
+    var sink: i64 = 0;
+    var timer: clock.Timer = .start();
+    var i: u64 = 0;
+    while (i < iters) : (i += 1) {
+        const s = if (white)
+            eval.global_evaluator.eval_full(board, types.Color.White)
+        else
+            eval.global_evaluator.eval_full(board, types.Color.Black);
+        sink +%= s; // keep the optimizer from deleting the eval call
+    }
+    const ns = @max(1, timer.read());
+    std.mem.doNotOptimizeAway(sink);
+    return .{ .nodes = iters, .ns = ns };
+}
+
+pub fn measure_eval(board: *types.Board, fen: []const u8, iters: u64) !Measure {
+    try bitboard.parse_fen(fen, board);
+    return measure_eval_pos(board, iters);
+}
+
+/// Full-engine speed: search to `depth` from a clean TT.
+pub fn measure_search(board: *types.Board, fen: []const u8, depth: u8) !Measure {
+    try bitboard.parse_fen(fen, board);
+    search.init_search();
+    if (search.global_tt) |*tt| tt.clear();
+    var timer: clock.Timer = .start();
+    if (board.side == types.Color.White)
+        search.search_position(board, depth, 0, 0, types.Color.White)
+    else
+        search.search_position(board, depth, 0, 0, types.Color.Black);
+    const ns = @max(1, timer.read());
+    return .{ .nodes = search.global_search.nodes, .ns = ns };
+}
+
+/// Component speed benchmark for the thesis methodology (tab:perft_positions).
+/// Over the six standard PERFT positions, measures all three component speeds:
+///   1. move generator  -> perft to `depth`, pure movegen (no zobrist/eval)
+///   2. evaluation       -> repeated static-eval calls, calls per second
+///   3. full search      -> search to `depth`, nodes per second of the whole engine
+pub fn speedbench(board: *types.Board, depth: u8, out: *std.Io.Writer) !void {
+    const eval_iters: u64 = 20_000_000;
+
+    try out.print("\n=== SPEED BENCHMARK (6 standardnih pozicij, globina {d}) ===\n", .{depth});
+    try out.print("{s:<14} | {s:>12} | {s:>10} | {s:>12}\n", .{ "Pozicija", "MoveGen MN/s", "Eval M/s", "Search kN/s" });
+    try out.print("---------------+--------------+------------+-------------\n", .{});
+
+    var sum_movegen: f64 = 0;
+    var sum_eval: f64 = 0;
+    var total_search_nodes: u64 = 0;
+    var total_search_ns: u128 = 0;
+
+    for (types.standard_perft_positions, types.standard_perft_names) |fen, name| {
+        const movegen_m = try measure_movegen(board, fen, depth);
+        const eval_m = try measure_eval(board, fen, eval_iters);
+        const search_m = try measure_search(board, fen, depth);
+
+        try out.print("{s:<14} | {d:>12.2} | {d:>10.2} | {d:>12.0}\n", .{ name, movegen_m.mps(), eval_m.mps(), search_m.per_sec() / 1000.0 });
+
+        sum_movegen += movegen_m.mps();
+        sum_eval += eval_m.mps();
+        total_search_nodes += search_m.nodes;
+        total_search_ns += search_m.ns;
+    }
+
+    const agg_search_nps = @as(f64, @floatFromInt(total_search_nodes)) * std.time.ns_per_s / @as(f64, @floatFromInt(total_search_ns));
+    try out.print("---------------+--------------+------------+-------------\n", .{});
+    try out.print("{s:<14} | {d:>12.2} | {d:>10.2} | {d:>12.0}\n", .{ "Povprecje", sum_movegen / 6.0, sum_eval / 6.0, agg_search_nps / 1000.0 });
+    try out.print("MN/s=mio vozlisc/s (movegen), M/s=mio klicev/s (eval), kN/s=tisoc vozlisc/s (search)\n", .{});
 }

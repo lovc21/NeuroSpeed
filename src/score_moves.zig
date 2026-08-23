@@ -25,6 +25,14 @@ pub const MVV_LVA = [6][6]i32{
 // Piece values for SEE
 const PIECE_VALUES = [7]i32{ 100, 320, 330, 500, 900, 20000, 0 };
 
+// SEE least-valuable-attacker probe order per side ([0]=White, [1]=Black),
+// hoisted to comptime consts so see() doesn't materialize the array per
+// exchange iteration.
+const SEE_ATTACKER_ORDER = [2][5]types.Piece{
+    .{ .WHITE_KNIGHT, .WHITE_BISHOP, .WHITE_ROOK, .WHITE_QUEEN, .WHITE_KING },
+    .{ .BLACK_KNIGHT, .BLACK_BISHOP, .BLACK_ROOK, .BLACK_QUEEN, .BLACK_KING },
+};
+
 // Score constants
 const SCORE_PROMOTION_QUEEN_CAPTURE = 9000000;
 const SCORE_PROMOTION_CAPTURE = 8000000;
@@ -289,10 +297,7 @@ pub fn see(board: *const types.Board, move: move_gen.Move, threshold: i32) bool 
 
         if (!found) {
             // Check other pieces in order of value
-            const piece_order = if (side == types.Color.White)
-                [_]types.Piece{ .WHITE_KNIGHT, .WHITE_BISHOP, .WHITE_ROOK, .WHITE_QUEEN, .WHITE_KING }
-            else
-                [_]types.Piece{ .BLACK_KNIGHT, .BLACK_BISHOP, .BLACK_ROOK, .BLACK_QUEEN, .BLACK_KING };
+            const piece_order = &SEE_ATTACKER_ORDER[@intFromEnum(side)];
 
             for (piece_order, 1..) |piece, piece_idx| {
                 const piece_attackers = my_attackers & board.pieces[@intFromEnum(piece)];

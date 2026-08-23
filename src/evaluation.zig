@@ -1,5 +1,5 @@
 const std = @import("std");
-const tables = @import("tables.zig");
+const tabeles = @import("tabeles.zig");
 const attacks = @import("attacks.zig");
 const types = @import("types.zig");
 const nnue = @import("nnue.zig");
@@ -529,6 +529,51 @@ pub const Evaluator = struct {
         return (14 - @as(i32, @intCast(distance_to_corner))) * 10;
     }
     // inspired by https://github.com/jabolcni/Lambergar/blob/822957acfbb2d386c29889cce17b8d88c999e2a1/src/evaluation.zig#L541C1-L1479C2 and added some additional features
+    // Comptime passed-pawn tables ([0]=White, [1]=Black). passed_span[c][sq] =
+    // the 3-file forward span an enemy pawn could block/attack from;
+    // passed_front_file[c][sq] = own-file squares from sq forward, inclusive.
+    // Built with the exact expressions of the old per-pawn mask loops in
+    // isPassedPawn, so the masks are bit-identical.
+    const passed_span: [2][64]u64 = blk: {
+        @setEvalBranchQuota(100_000);
+        var t: [2][64]u64 = .{ .{0} ** 64, .{0} ** 64 };
+        for (0..64) |sq| {
+            const file = sq % 8;
+            const rank = sq / 8;
+            var w: u64 = 0;
+            for (rank + 1..8) |r| {
+                w |= types.square_bb[r * 8 + file];
+                if (file > 0) w |= types.square_bb[r * 8 + (file - 1)];
+                if (file < 7) w |= types.square_bb[r * 8 + (file + 1)];
+            }
+            t[0][sq] = w;
+            var b: u64 = 0;
+            var r = rank;
+            while (r > 0) {
+                r -= 1;
+                b |= types.square_bb[r * 8 + file];
+                if (file > 0) b |= types.square_bb[r * 8 + (file - 1)];
+                if (file < 7) b |= types.square_bb[r * 8 + (file + 1)];
+            }
+            t[1][sq] = b;
+        }
+        break :blk t;
+    };
+
+    const passed_front_file: [2][64]u64 = blk: {
+        @setEvalBranchQuota(100_000);
+        var t: [2][64]u64 = .{ .{0} ** 64, .{0} ** 64 };
+        for (0..64) |sq| {
+            const file = sq % 8;
+            // White: own file from sq up (inclusive); Black: from sq down
+            // (inclusive; sq=63 saturates — pawns never stand there).
+            const upto: u64 = if (sq == 63) ~@as(u64, 0) else (@as(u64, 1) << @intCast(sq + 1)) - 1;
+            t[0][sq] = types.mask_file[file] & ~((@as(u64, 1) << @intCast(sq)) - 1);
+            t[1][sq] = types.mask_file[file] & upto;
+        }
+        break :blk t;
+    };
+
     pub fn evaluate_peace(board: *const types.Board) [2]i32 {
         var score = [_]i32{ 0, 0 };
 
@@ -539,7 +584,7 @@ pub const Evaluator = struct {
         const white_queen = board.pieces[types.Piece.WHITE_QUEEN.toU4()];
         const white_king = board.pieces[types.Piece.WHITE_KING.toU4()];
         const white_king_square = if (white_king != 0) util.lsb_index(white_king) else 0;
-        const white_king_zone = if (white_king_square < 64) tables.king_areas[white_king_square] else 0;
+        const white_king_zone = if (white_king_square < 64) tabeles.King_areas[white_king_square] else 0;
         var white_danger_score: i32 = 0;
         var white_danger_pieces: u5 = 0;
         var white_att: u64 = 0;
@@ -553,7 +598,7 @@ pub const Evaluator = struct {
         const black_queen = board.pieces[types.Piece.BLACK_QUEEN.toU4()];
         const black_king = board.pieces[types.Piece.BLACK_KING.toU4()];
         const black_king_square = if (black_king != 0) util.lsb_index(black_king) else 0;
-        const black_king_zone = if (black_king_square < 64) tables.king_areas[black_king_square] else 0;
+        const black_king_zone = if (black_king_square < 64) tabeles.King_areas[black_king_square] else 0;
         var black_danger_score: i32 = 0;
         var black_danger_pieces: u5 = 0;
         var black_att: u64 = 0;
@@ -582,42 +627,13 @@ pub const Evaluator = struct {
         var white_passed_bb: u64 = 0;
         var black_passed_bb: u64 = 0;
 
-        // check if pawn is passed
+        // check if pawn is passed — masks precomputed at comptime
+        // (passed_span / passed_front_file above)
         const isPassedPawn = struct {
-            fn call(pawn_sq: u6, color: types.Color, enemy_pawns: u64, own_pawns: u64) bool {
-                const file: u6 = @intCast(pawn_sq % 8);
-                const rank: u6 = @intCast(pawn_sq / 8);
-
-                // Create masks for files and ranks in front of pawn
-                var front_mask: u64 = 0;
-                var file_mask: u64 = 0;
-
-                if (color == types.Color.White) {
-                    // White pawns move up (increasing rank)
-                    for (rank + 1..8) |r| {
-                        file_mask |= types.square_bb[r * 8 + file];
-                        if (file > 0) file_mask |= types.square_bb[r * 8 + (file - 1)];
-                        if (file < 7) file_mask |= types.square_bb[r * 8 + (file + 1)];
-                    }
-                    // Check no enemy pawns block or attack the path
-                    front_mask = file_mask & enemy_pawns;
-                    // Also check no friendly pawns in front
-                    const front_file = types.mask_file[file] & ~((@as(u64, 1) << @intCast(pawn_sq)) - 1);
-                    return front_mask == 0 and (own_pawns & front_file) == types.square_bb[pawn_sq];
-                } else {
-                    // Black pawns move down (decreasing rank)
-                    var r: i8 = @intCast(rank);
-                    r -= 1;
-                    while (r >= 0) : (r -= 1) {
-                        const ur: u6 = @intCast(r);
-                        file_mask |= types.square_bb[ur * 8 + file];
-                        if (file > 0) file_mask |= types.square_bb[ur * 8 + (file - 1)];
-                        if (file < 7) file_mask |= types.square_bb[ur * 8 + (file + 1)];
-                    }
-                    front_mask = file_mask & enemy_pawns;
-                    const front_file = types.mask_file[file] & ((@as(u64, 1) << @intCast(pawn_sq + 1)) - 1);
-                    return front_mask == 0 and (own_pawns & front_file) == types.square_bb[pawn_sq];
-                }
+            fn call(pawn_sq: u6, comptime color: types.Color, enemy_pawns: u64, own_pawns: u64) bool {
+                const c: usize = comptime if (color == types.Color.White) 0 else 1;
+                if ((passed_span[c][pawn_sq] & enemy_pawns) != 0) return false;
+                return (own_pawns & passed_front_file[c][pawn_sq]) == types.square_bb[pawn_sq];
             }
         }.call;
 
@@ -634,8 +650,7 @@ pub const Evaluator = struct {
 
         //check if square is outpost
         const isOutpost = struct {
-            fn call(sq: u6, color: types.Color, enemy_pawns: u64, own_pawn_attacks: u64) bool {
-                const file: u6 = @intCast(sq % 8);
+            fn call(sq: u6, comptime color: types.Color, enemy_pawns: u64, own_pawn_attacks: u64) bool {
                 const rank: u6 = @intCast(sq / 8);
 
                 // Must be in enemy territory and defended by own pawn
@@ -643,16 +658,14 @@ pub const Evaluator = struct {
                 if (color == types.Color.Black and rank > 3) return false;
                 if ((own_pawn_attacks & types.square_bb[sq]) == 0) return false;
 
-                // No enemy pawns can attack this square
-                var attack_mask: u64 = 0;
-                if (color == types.Color.White) {
-                    // Check if black pawns can attack this square
-                    if (file > 0 and rank > 0) attack_mask |= types.square_bb[(rank - 1) * 8 + (file - 1)];
-                    if (file < 7 and rank > 0) attack_mask |= types.square_bb[(rank - 1) * 8 + (file + 1)];
-                } else {
-                    if (file > 0 and rank < 7) attack_mask |= types.square_bb[(rank + 1) * 8 + (file - 1)];
-                    if (file < 7 and rank < 7) attack_mask |= types.square_bb[(rank + 1) * 8 + (file + 1)];
-                }
+                // No enemy pawns can attack this square. By pawn reciprocity
+                // the attacker squares are exactly the squares an OPPOSITE-
+                // color pawn on sq attacks — same mask the old hand-built
+                // block produced (edge guards included: the table is 0 there).
+                const attack_mask = if (color == types.Color.White)
+                    tabeles.Black_pawn_attacks_tabele[sq]
+                else
+                    tabeles.White_pawn_attacks_tabele[sq];
                 return (enemy_pawns & attack_mask) == 0;
             }
         }.call;
