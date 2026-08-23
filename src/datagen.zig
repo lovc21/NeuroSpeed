@@ -7,7 +7,7 @@ const lists = @import("lists.zig");
 const search = @import("search.zig");
 const attacks = @import("attacks.zig");
 const nnue = @import("nnue.zig");
-const globals = @import("globals.zig");
+const clock = @import("clock.zig");
 
 // Search reports forced mates as |score| > MATE_VALUE-100 (MATE_VALUE = 32000,
 // kept in sync with search.zig — mate scores must fit the i16 TT field).
@@ -183,7 +183,7 @@ fn play_one_game(
             _ = gen_and_check(&board, &list);
             if (list.count == 0) continue :open; // terminal mid-opening, restart
             const idx = rng.uintLessThan(usize, list.count);
-            _ = move_gen.make_move_search(&board, list.moves[idx]);
+            _ = move_gen.make_move_search_rt(&board, list.moves[idx]);
         }
 
         // Fresh search heuristics + TT per game for cleaner, less
@@ -310,7 +310,7 @@ fn play_one_game(
             history[hist_len] = board.hash;
             hist_len += 1;
         }
-        _ = move_gen.make_move_search(&board, best);
+        _ = move_gen.make_move_search_rt(&board, best);
         ply += 1;
     }
 
@@ -337,10 +337,10 @@ pub fn run(allocator: std.mem.Allocator, cfg: Config) !void {
         std.debug.print("datagen: labeling with embedded NNUE net\n", .{});
     }
 
-    var out_file = try std.Io.Dir.cwd().createFile(globals.io, cfg.out_path, .{});
-    defer out_file.close(globals.io);
+    var out_file = try std.Io.Dir.cwd().createFile(clock.io, cfg.out_path, .{});
+    defer out_file.close(clock.io);
     var out_buf: [64 * 1024]u8 = undefined;
-    var out_fw = out_file.writer(globals.io, &out_buf);
+    var out_fw = out_file.writer(clock.io, &out_buf);
     const out = &out_fw.interface;
 
     var prng = std.Random.DefaultPrng.init(cfg.seed);
@@ -349,20 +349,20 @@ pub fn run(allocator: std.mem.Allocator, cfg: Config) !void {
     var samples: std.ArrayList(Sample) = .empty;
     defer samples.deinit(allocator);
 
-    const start_ms = globals.nowMs();
+    const start_ms = clock.nowMs();
     var total: u64 = 0;
     var g: u64 = 0;
     while (g < cfg.games) : (g += 1) {
         total += try play_one_game(allocator, cfg, rng, out, &samples);
         if (cfg.verbose or (g + 1) % 100 == 0) {
-            const el = globals.nowMs() - start_ms;
+            const el = clock.nowMs() - start_ms;
             const pps: u64 = if (el > 0) total * 1000 / @as(u64, @intCast(el)) else 0;
             std.debug.print("datagen: game {}/{} positions={} pos/s={} elapsed={}ms\n", .{ g + 1, cfg.games, total, pps, el });
         }
     }
     try out.flush();
 
-    const el = globals.nowMs() - start_ms;
+    const el = clock.nowMs() - start_ms;
     std.debug.print("datagen done: games={} positions={} out={s} elapsed={}ms openings_discarded={} games_dropped={} adj_wins={} adj_draws={}\n", .{ cfg.games, total, cfg.out_path, el, stat_openings_discarded, stat_games_dropped, stat_adj_wins, stat_adj_draws });
 }
 

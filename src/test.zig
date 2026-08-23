@@ -1,5 +1,5 @@
 const std = @import("std");
-const tables = @import("tables.zig");
+const tabeles = @import("tabeles.zig");
 const types = @import("types.zig");
 const attacks = @import("attacks.zig");
 const bitboard = @import("bitboard.zig");
@@ -11,9 +11,36 @@ const lists = @import("lists.zig");
 const zobrist = @import("zobrist.zig");
 const nnue = @import("nnue.zig");
 const datagen = @import("datagen.zig");
-const globals = @import("globals.zig");
+const clock = @import("clock.zig");
 const print = std.debug.print;
 const expect = std.testing.expect;
+
+test "clock: timer accuracy (cycle-counter path if available)" {
+    clock.init();
+    print("clock: cycle-counter path active = {}\n", .{clock.usingCycleCounter()});
+    // A 50ms sleep must measure as at least 50ms and not wildly more,
+    // whichever backend is active.
+    var t: clock.Timer = .start();
+    try clock.io.sleep(.fromMilliseconds(50), .awake);
+    const ns = t.read();
+    try expect(ns >= 49 * std.time.ns_per_ms);
+    try expect(ns <= 250 * std.time.ns_per_ms);
+    // Reads never go backwards.
+    var t2: clock.Timer = .start();
+    var prev: u64 = 0;
+    for (0..50_000) |_| {
+        const v = t2.read();
+        try expect(v >= prev);
+        prev = v;
+    }
+    // Deadline: not expired fresh, expired after its window passes.
+    const dl: clock.Deadline = .afterMs(30);
+    try expect(!dl.expired());
+    try clock.io.sleep(.fromMilliseconds(40), .awake);
+    try expect(dl.expired());
+    const dl_never: clock.Deadline = .never;
+    try expect(!dl_never.expired());
+}
 
 test "test print bitboard" {
     bitboard.print_board(0x382838);
@@ -187,9 +214,9 @@ test "rook attacks with one blocker" {
     attacks.init_rook_attacks();
     const sq_idx: u8 = 27;
     const occ_single: u64 = (@as(u64, 1) << (3 + 5 * 8)); // blocker on d6
-    const occ_masked = occ_single & tables.rook_attack_masks[sq_idx];
-    const relevantBits = tables.rook_index_bits[sq_idx];
-    const magic = tables.rook_magics[sq_idx];
+    const occ_masked = occ_single & tabeles.Rook_attackes_tabele[sq_idx];
+    const relevantBits = tabeles.Rook_index_bit[sq_idx];
+    const magic = tabeles.rook_magics[sq_idx];
     const shift8: u8 = 64 - relevantBits;
     const shift: u6 = @truncate(shift8);
     const idx = (@as(u64, occ_masked) *% magic) >> shift;
@@ -214,10 +241,10 @@ test "bishop attacks with one blocker" {
     attacks.init_bishop_attacks();
     const sq_idx: u8 = 27; // d4
     const occ_single: u64 = (@as(u64, 1) << 45); // blocker on f6
-    const mask = tables.bishop_attack_masks[sq_idx];
+    const mask = tabeles.Bishops_attackes_tabele[sq_idx];
     const occ_masked = occ_single & mask;
-    const relevantBits = tables.bishop_index_bits[sq_idx];
-    const magic = tables.bishop_magics[sq_idx];
+    const relevantBits = tabeles.Bishop_index_bit[sq_idx];
+    const magic = tabeles.bishop_magics[sq_idx];
     const shift: u6 = @truncate(64 - relevantBits);
     const idx64 = (@as(u64, occ_masked) *% magic) >> shift;
     const idx: usize = @intCast(idx64);
@@ -545,7 +572,7 @@ test "test phase calculation" {
             const old_phase_w = eval.global_evaluator.phase[0];
             const old_phase_b = eval.global_evaluator.phase[1];
 
-            _ = move_gen.make_move_search(&board, move);
+            _ = move_gen.make_move_search_rt(&board, move);
             print("Phases before capture: White={}, Black={}\n", .{ old_phase_w, old_phase_b });
             print("Phases after capture:  White={}, Black={}\n", .{ eval.global_evaluator.phase[0], eval.global_evaluator.phase[1] });
             capture_made = true;
@@ -574,7 +601,7 @@ test "test phase calculation" {
             const old_phase_w = eval.global_evaluator.phase[0];
             const old_phase_b = eval.global_evaluator.phase[1];
 
-            _ = move_gen.make_move_search(&board, move);
+            _ = move_gen.make_move_search_rt(&board, move);
             print("Phases before promotion: White={}, Black={}\n", .{ old_phase_w, old_phase_b });
             print("Phases after promotion:  White={}, Black={}\n", .{ eval.global_evaluator.phase[0], eval.global_evaluator.phase[1] });
             print("Expected change: -0 (pawn) +6 (queen) = +6 for white\n", .{});
@@ -615,7 +642,7 @@ test "Zobrist hash consistency after moves" {
         for (0..move_list.count) |i| {
             const move = move_list.moves[i];
 
-            const undo = move_gen.make_move_search(&board, move);
+            const undo = move_gen.make_move_search_rt(&board, move);
             const expected_hash = zobrist.compute_hash(&board);
             if (board.hash != expected_hash) {
                 const from_str = types.SquareString.getSquareToString(@enumFromInt(move.from));
@@ -627,7 +654,7 @@ test "Zobrist hash consistency after moves" {
             }
             try std.testing.expectEqual(expected_hash, board.hash);
 
-            move_gen.unmake_move_search(&board, move, undo);
+            move_gen.unmake_move_search_rt(&board, move, undo);
             try std.testing.expectEqual(initial_hash, board.hash);
         }
     }
@@ -635,17 +662,9 @@ test "Zobrist hash consistency after moves" {
 
 fn run_perft_legal_bench(fen: []const u8, name: []const u8, depth: u8, expected: u64) !void {
     var board = types.Board.new();
-    try bitboard.parse_fen(fen, &board);
-    var timer: globals.Timer = .start();
-    const nodes: u64 = if (board.side == types.Color.White)
-        util.perft_legal(types.Color.White, &board, depth)
-    else
-        util.perft_legal(types.Color.Black, &board, depth);
-    const elapsed_ns = timer.read();
-    const elapsed_ms = elapsed_ns / std.time.ns_per_ms;
-    const mnps = if (elapsed_ns > 0) @as(f64, @floatFromInt(nodes)) / @as(f64, @floatFromInt(elapsed_ns)) * 1000.0 else 0.0;
-    print("{s}: {d} nodes, {d}ms, {d:.2} MNodes/s\n", .{ name, nodes, elapsed_ms, mnps });
-    try std.testing.expectEqual(expected, nodes);
+    const m = try bench.measure_movegen(&board, fen, depth);
+    print("{s}: {d} nodes, {d}ms, {d:.2} MNodes/s\n", .{ name, m.nodes, m.ns / std.time.ns_per_ms, m.mps() });
+    try std.testing.expectEqual(expected, m.nodes);
 }
 
 test "Legal perft startpos d5" {
@@ -682,21 +701,8 @@ const bench = @import("bench.zig");
 
 fn bench_eval_one(fen: []const u8, name: []const u8, iters: u64) !void {
     var board = types.Board.new();
-    try bitboard.parse_fen(fen, &board); // also sets up global_evaluator (material+phase)
-    var sink: i64 = 0;
-    var timer: globals.Timer = .start();
-    var i: u64 = 0;
-    while (i < iters) : (i += 1) {
-        const s = if (board.side == types.Color.White)
-            eval.global_evaluator.eval_full(&board, types.Color.White)
-        else
-            eval.global_evaluator.eval_full(&board, types.Color.Black);
-        sink +%= s; // keep the optimizer from deleting the eval call
-    }
-    const ns = @max(1, timer.read());
-    std.mem.doNotOptimizeAway(sink);
-    const meps = @as(f64, @floatFromInt(iters)) / @as(f64, @floatFromInt(ns)) * 1000.0;
-    print("{s:<14}: {d:>10.2} M eval/s\n", .{ name, meps });
+    const m = try bench.measure_eval(&board, fen, iters);
+    print("{s:<14}: {d:>10.2} M eval/s\n", .{ name, m.mps() });
 }
 
 test "Eval speed benchmark" {
@@ -713,15 +719,8 @@ test "MoveGen speed benchmark" {
     print("\n=== MOVEGEN SPEED BENCHMARK (perft d6, MNodes/s) ===\n", .{});
     for (types.standard_perft_positions, types.standard_perft_names) |fen, name| {
         var board = types.Board.new();
-        try bitboard.parse_fen(fen, &board);
-        var timer: globals.Timer = .start();
-        const nodes: u64 = if (board.side == types.Color.White)
-            util.perft_legal(types.Color.White, &board, 6)
-        else
-            util.perft_legal(types.Color.Black, &board, 6);
-        const ns = @max(1, timer.read());
-        const mnps = @as(f64, @floatFromInt(nodes)) / @as(f64, @floatFromInt(ns)) * 1000.0;
-        print("{s:<14}: {d:>12} nodes, {d:>8.2} MNodes/s\n", .{ name, nodes, mnps });
+        const m = try bench.measure_movegen(&board, fen, 6);
+        print("{s:<14}: {d:>12} nodes, {d:>8.2} MNodes/s\n", .{ name, m.nodes, m.mps() });
     }
 }
 

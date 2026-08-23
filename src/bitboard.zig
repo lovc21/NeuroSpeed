@@ -2,7 +2,7 @@ const std = @import("std");
 const util = @import("util.zig");
 const types = @import("types.zig");
 const attacks = @import("attacks.zig");
-const tables = @import("tables.zig");
+const tabeles = @import("tabeles.zig");
 const eval = @import("evaluation.zig");
 const zobrist = @import("zobrist.zig");
 const print = std.debug.print;
@@ -94,7 +94,7 @@ pub fn print_unicode_board(board: types.Board) void {
 pub fn is_square_attacked(
     board: *const types.Board,
     square: u6,
-    by_side: types.Color,
+    comptime by_side: types.Color,
 ) bool {
     const occ = board.pieces_combined();
     const bbs = board.pieces;
