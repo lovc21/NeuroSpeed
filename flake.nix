@@ -1,33 +1,24 @@
 {
-  description = "NeuroSpeed chess engine";
+  description = "NeuroSpeed dev environment";
 
-  inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    zig-overlay.url = "github:mitchellh/zig-overlay";
-    flake-utils.url = "github:numtide/flake-utils";
-  };
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/c8f90650c15282fa8656a041bfbbd2403997a9a7";
 
-  outputs = { self, nixpkgs, zig-overlay, flake-utils, ... }:
-    flake-utils.lib.eachDefaultSystem (system:
-      let
-        pkgs = import nixpkgs {
-          inherit system;
-          overlays = [ zig-overlay.overlays.default ];
-        };
-        
-        zigVersion = pkgs.zigpkgs."0.14.1";
-      in
-      {
-        devShells.default = pkgs.mkShell {
-          buildInputs = [
-            zigVersion
-            pkgs.zls
-          ];
-
-          shellHook = ''
-            echo "Zig $(zig version)"
-          '';
-        };
-      }
-    );
+  outputs = { self, nixpkgs }:
+    let
+      system = "x86_64-linux";
+      pkgs = nixpkgs.legacyPackages.${system};
+    in {
+      devShells.${system}.default = pkgs.mkShell {
+        packages = with pkgs; [
+          zig_0_16
+          just
+          cutechess
+          stockfish
+          perf
+          llvmPackages_22.bolt
+          flamegraph
+          python3
+        ];
+      };
+    };
 }
