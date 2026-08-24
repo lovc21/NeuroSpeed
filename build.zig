@@ -23,6 +23,9 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+    // Keep relocations in the final binary so llvm-bolt can re-lay-out hot
+    // code (see bolt.sh). Costs only file size, never runtime.
+    exe.link_emit_relocs = true;
 
     // The NNUE nets live in nets/ (outside the src/ module root), so they are
     // registered as anonymous imports — @embedFile("big_nnuev3") in nnue.zig
