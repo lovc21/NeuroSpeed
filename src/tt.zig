@@ -77,19 +77,18 @@ pub const Cluster = [CLUSTER_SIZE]TTEntry;
 const CLUSTER_BYTES = @sizeOf(Cluster);
 const EMPTY_CLUSTER: Cluster = .{TTEntry{}} ** CLUSTER_SIZE;
 
-// 2 MB alignment so the kernel can back the table with transparent huge pages
-const HUGE_PAGE: usize = 2 * 1024 * 1024;
-const HUGE_ALIGN = std.mem.Alignment.fromByteUnits(HUGE_PAGE);
+// 2 MB alignment on Linux for transparent huge pages; Windows can't allocate that, so use a cache line elsewhere
+const TT_ALIGN: usize = if (builtin.os.tag == .linux) 2 * 1024 * 1024 else 64;
 
 pub const TT = struct {
-    clusters: []align(HUGE_PAGE) Cluster,
+    clusters: []align(TT_ALIGN) Cluster,
     age: u8 = 0,
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, size_mb: usize) !TT {
         const num_clusters = @max(1, (size_mb * 1024 * 1024) / CLUSTER_BYTES);
 
-        const clusters = try allocator.alignedAlloc(Cluster, HUGE_ALIGN, num_clusters);
+        const clusters = try allocator.alignedAlloc(Cluster, std.mem.Alignment.fromByteUnits(TT_ALIGN), num_clusters);
         advise_huge_pages(clusters);
         @memset(clusters, EMPTY_CLUSTER);
 
@@ -100,7 +99,7 @@ pub const TT = struct {
         };
     }
 
-    fn advise_huge_pages(clusters: []align(HUGE_PAGE) Cluster) void {
+    fn advise_huge_pages(clusters: []align(TT_ALIGN) Cluster) void {
         if (builtin.os.tag != .linux) return;
         const bytes = std.mem.sliceAsBytes(clusters);
         std.posix.madvise(@alignCast(bytes.ptr), bytes.len, std.os.linux.MADV.HUGEPAGE) catch {};
