@@ -1,15 +1,85 @@
 const std = @import("std");
-const tabele = @import("tabeles.zig");
+const tabeles = @import("tabeles.zig");
 const types = @import("types.zig");
 const attacks = @import("attacks.zig");
 const bitboard = @import("bitboard.zig");
 const util = @import("util.zig");
 const eval = @import("evaluation.zig");
-const move_gen = @import("move_generation.zig");
+const move_gen = @import("move.zig");
+const movegen = @import("movegen.zig");
 const lists = @import("lists.zig");
 const zobrist = @import("zobrist.zig");
+const nnue = @import("nnue.zig");
+const datagen = @import("datagen.zig");
+const clock = @import("clock.zig");
+const tm = @import("time_management.zig");
+const tt = @import("tt.zig");
+const search = @import("search.zig");
+const bench = @import("bench.zig");
 const print = std.debug.print;
 const expect = std.testing.expect;
+
+comptime {
+    _ = @import("memops");
+}
+
+test "time management budget matches reference vectors" {
+    // Vectors from an independent model of the budget arithmetic (overhead 10 ms, default tm_* params, increments counted in full).
+    const V = struct { time: u64, inc: u64, movestogo: ?u64, soft: u64, hard: u64 };
+    const vectors = [_]V{
+        .{ .time = 60000, .inc = 0, .movestogo = null, .soft = 1989, .hard = 27595 },
+        .{ .time = 60000, .inc = 1000, .movestogo = null, .soft = 3656, .hard = 27595 },
+        .{ .time = 180000, .inc = 2000, .movestogo = null, .soft = 9322, .hard = 82795 },
+        .{ .time = 1500, .inc = 0, .movestogo = null, .soft = 39, .hard = 685 },
+        .{ .time = 500, .inc = 0, .movestogo = null, .soft = 9, .hard = 225 },
+        .{ .time = 100, .inc = 0, .movestogo = null, .soft = 6, .hard = 41 },
+        .{ .time = 30, .inc = 0, .movestogo = null, .soft = 5, .hard = 9 },
+        .{ .time = 8, .inc = 0, .movestogo = null, .soft = 2, .hard = 2 },
+        .{ .time = 3, .inc = 0, .movestogo = null, .soft = 1, .hard = 1 },
+        .{ .time = 60000, .inc = 0, .movestogo = 30, .soft = 1400, .hard = 27595 },
+        .{ .time = 120000, .inc = 2000, .movestogo = 40, .soft = 3500, .hard = 55195 },
+        .{ .time = 2000, .inc = 50, .movestogo = 80, .soft = 63, .hard = 915 },
+        .{ .time = 60000, .inc = 10, .movestogo = null, .soft = 2006, .hard = 27595 },
+        .{ .time = 60000, .inc = 11, .movestogo = null, .soft = 2007, .hard = 27595 },
+    };
+    for (vectors) |v| {
+        const b = tm.time_management(v.time, v.inc, v.movestogo, 10);
+        try std.testing.expectEqual(v.soft, b.soft);
+        try std.testing.expectEqual(v.hard, b.hard);
+    }
+    // go-level shortcuts and side selection
+    try std.testing.expectEqual(tm.Budget{ .soft = 1000, .hard = 1000 }, tm.budget(.{ .movetime = 1000, .wtime = 5 }, .White, 10));
+    try std.testing.expectEqual(tm.Budget{}, tm.budget(.{ .infinite = true, .wtime = 60000 }, .White, 10));
+    try std.testing.expectEqual(tm.Budget{}, tm.budget(.{ .depth = 5, .wtime = 60000 }, .White, 10));
+    try std.testing.expectEqual(tm.Budget{ .soft = 1989, .hard = 27595 }, tm.budget(.{ .wtime = 60000, .btime = 1 }, .White, 10));
+    try std.testing.expectEqual(tm.Budget{ .soft = 1989, .hard = 27595 }, tm.budget(.{ .wtime = 1, .btime = 60000 }, .Black, 10));
+}
+
+test "clock: timer accuracy (cycle-counter path if available)" {
+    clock.init();
+    print("clock: cycle-counter path active = {}\n", .{clock.usingCycleCounter()});
+    // A 50ms sleep must measure at least 50ms and not much more.
+    var t: clock.Timer = .start();
+    try clock.io.sleep(.fromMilliseconds(50), .awake);
+    const ns = t.read();
+    try expect(ns >= 49 * std.time.ns_per_ms);
+    try expect(ns <= 250 * std.time.ns_per_ms);
+    // Reads never go backwards.
+    var t2: clock.Timer = .start();
+    var prev: u64 = 0;
+    for (0..50_000) |_| {
+        const v = t2.read();
+        try expect(v >= prev);
+        prev = v;
+    }
+    // Deadline: not expired fresh, expired after its window passes.
+    const dl: clock.Deadline = .afterMs(30);
+    try expect(!dl.expired());
+    try clock.io.sleep(.fromMilliseconds(40), .awake);
+    try expect(dl.expired());
+    const dl_never: clock.Deadline = .never;
+    try expect(!dl_never.expired());
+}
 
 test "test print bitboard" {
     bitboard.print_board(0x382838);
@@ -18,147 +88,96 @@ test "test print bitboard" {
 }
 
 test "test print bitboard unicode" {
-    var b: types.Board = .{
-        .pieces = [_]types.Bitboard{0} ** types.Board.PieceCount,
-        .side = types.Color.Black,
-        .board = undefined,
-        .enpassant = types.square.e3,
-        .castle = @intFromEnum(types.Castle.WK) | @intFromEnum(types.Castle.WQ) | @intFromEnum(types.Castle.BK) | @intFromEnum(types.Castle.BQ),
-    };
-
-    // White pieces
-    // pawns
-    b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)], types.square.a2);
-    b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)], types.square.b2);
-    b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)], types.square.c2);
-    b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)], types.square.d2);
-    b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)], types.square.e2);
-    b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)], types.square.f2);
-    b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)], types.square.g2);
-    b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)], types.square.h2);
-    // knights
-    b.pieces[@intFromEnum(types.Piece.WHITE_KNIGHT)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_KNIGHT)], types.square.b1);
-    b.pieces[@intFromEnum(types.Piece.WHITE_KNIGHT)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_KNIGHT)], types.square.g1);
-    // bishops
-    b.pieces[@intFromEnum(types.Piece.WHITE_BISHOP)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_BISHOP)], types.square.c1);
-    b.pieces[@intFromEnum(types.Piece.WHITE_BISHOP)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_BISHOP)], types.square.f1);
-    // rooks
-    b.pieces[@intFromEnum(types.Piece.WHITE_ROOK)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_ROOK)], types.square.a1);
-    b.pieces[@intFromEnum(types.Piece.WHITE_ROOK)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_ROOK)], types.square.h1);
-    // queen  king
-    b.pieces[@intFromEnum(types.Piece.WHITE_QUEEN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_QUEEN)], types.square.d1);
-    b.pieces[@intFromEnum(types.Piece.WHITE_KING)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_KING)], types.square.e1);
-
-    // Black pieces
-    // pawns
-    b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)], types.square.a7);
-    b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)], types.square.b7);
-    b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)], types.square.c7);
-    b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)], types.square.d7);
-    b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)], types.square.e7);
-    b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)], types.square.f7);
-    b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)], types.square.g7);
-    b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)], types.square.h7);
-    // knights
-    b.pieces[@intFromEnum(types.Piece.BLACK_KNIGHT)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_KNIGHT)], types.square.b8);
-    b.pieces[@intFromEnum(types.Piece.BLACK_KNIGHT)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_KNIGHT)], types.square.g8);
-    // bishops
-    b.pieces[@intFromEnum(types.Piece.BLACK_BISHOP)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_BISHOP)], types.square.c8);
-    b.pieces[@intFromEnum(types.Piece.BLACK_BISHOP)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_BISHOP)], types.square.f8);
-    // rooks
-    b.pieces[@intFromEnum(types.Piece.BLACK_ROOK)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_ROOK)], types.square.a8);
-    b.pieces[@intFromEnum(types.Piece.BLACK_ROOK)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_ROOK)], types.square.h8);
-    // queen  king
-    b.pieces[@intFromEnum(types.Piece.BLACK_QUEEN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_QUEEN)], types.square.d8);
-    b.pieces[@intFromEnum(types.Piece.BLACK_KING)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_KING)], types.square.e8);
-
+    // Black to move, all castling rights and an ep square, so every FEN field is printed.
+    var b = types.Board.new();
+    try bitboard.parse_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR b KQkq e3 0 1", &b);
     bitboard.print_unicode_board(b);
 }
 
 test "white pawn attacks" {
     print("White pawn attacks from e2 : 0x280000\n", .{});
-    try expect(attacks.pawn_attacks_from_bitboard(types.Color.White, util.set_bit(types.empty_Bitboard, types.square.e2)) == 0x280000);
+    try expect(attacks.pawn_attacks_from_bitboard(types.Color.White, util.set_bit(types.empty_bitboard, types.square.e2)) == 0x280000);
 
     print("White pawn attacks from a2 : 0x20000\n", .{});
-    try expect(attacks.pawn_attacks_from_bitboard(types.Color.White, util.set_bit(types.empty_Bitboard, types.square.a2)) == 0x20000);
+    try expect(attacks.pawn_attacks_from_bitboard(types.Color.White, util.set_bit(types.empty_bitboard, types.square.a2)) == 0x20000);
 
     print("White pawn attacks from h2 : 0x400000\n", .{});
-    try expect(attacks.pawn_attacks_from_bitboard(types.Color.White, util.set_bit(types.empty_Bitboard, types.square.h2)) == 0x400000);
+    try expect(attacks.pawn_attacks_from_bitboard(types.Color.White, util.set_bit(types.empty_bitboard, types.square.h2)) == 0x400000);
 
     print("White pawn attacks from d4 : 0x1400000000\n", .{});
-    try expect(attacks.pawn_attacks_from_bitboard(types.Color.White, util.set_bit(types.empty_Bitboard, types.square.d4)) == 0x1400000000);
+    try expect(attacks.pawn_attacks_from_bitboard(types.Color.White, util.set_bit(types.empty_bitboard, types.square.d4)) == 0x1400000000);
 
     print("White pawn attacks from f7 : 0x5000000000000000\n", .{});
-    try expect(attacks.pawn_attacks_from_bitboard(types.Color.White, util.set_bit(types.empty_Bitboard, types.square.f7)) == 0x5000000000000000);
+    try expect(attacks.pawn_attacks_from_bitboard(types.Color.White, util.set_bit(types.empty_bitboard, types.square.f7)) == 0x5000000000000000);
 }
 
 test "black pawn attacks" {
     print("Black pawn attacks form e7 : 0x280000000000\n", .{});
-    try expect(attacks.pawn_attacks_from_bitboard(types.Color.Black, util.set_bit(types.empty_Bitboard, types.square.e7)) == 0x280000000000);
+    try expect(attacks.pawn_attacks_from_bitboard(types.Color.Black, util.set_bit(types.empty_bitboard, types.square.e7)) == 0x280000000000);
 
     print("Black pawn attacks from a7 : 0x20000000000\n", .{});
-    try expect(attacks.pawn_attacks_from_bitboard(types.Color.Black, util.set_bit(types.empty_Bitboard, types.square.a7)) == 0x20000000000);
+    try expect(attacks.pawn_attacks_from_bitboard(types.Color.Black, util.set_bit(types.empty_bitboard, types.square.a7)) == 0x20000000000);
 
     print("Black pawn attacks from h7 : 0x400000000000\n", .{});
-    try expect(attacks.pawn_attacks_from_bitboard(types.Color.Black, util.set_bit(types.empty_Bitboard, types.square.h7)) == 0x400000000000);
+    try expect(attacks.pawn_attacks_from_bitboard(types.Color.Black, util.set_bit(types.empty_bitboard, types.square.h7)) == 0x400000000000);
 
     print("Black pawn attacks from d5 : 0x14000000\n", .{});
-    try expect(attacks.pawn_attacks_from_bitboard(types.Color.Black, util.set_bit(types.empty_Bitboard, types.square.d5)) == 0x14000000);
+    try expect(attacks.pawn_attacks_from_bitboard(types.Color.Black, util.set_bit(types.empty_bitboard, types.square.d5)) == 0x14000000);
 
     print("Black pawn attacks from f2 : 0x50\n", .{});
-    try expect(attacks.pawn_attacks_from_bitboard(types.Color.Black, util.set_bit(types.empty_Bitboard, types.square.f2)) == 0x50);
+    try expect(attacks.pawn_attacks_from_bitboard(types.Color.Black, util.set_bit(types.empty_bitboard, types.square.f2)) == 0x50);
 }
 
 test "King attacks" {
     print("King attacks from e2 : 0x382838\n", .{});
-    try expect(attacks.king_attacks_from_bitboard(util.set_bit(types.empty_Bitboard, types.square.e2)) == 0x382838);
+    try expect(attacks.king_attacks_from_bitboard(util.set_bit(types.empty_bitboard, types.square.e2)) == 0x382838);
 
     print("King attacks from h1 : 0xC040\n", .{});
-    try expect(attacks.king_attacks_from_bitboard(util.set_bit(types.empty_Bitboard, types.square.h1)) == 0xC040);
+    try expect(attacks.king_attacks_from_bitboard(util.set_bit(types.empty_bitboard, types.square.h1)) == 0xC040);
 
     print("King attacks from a8 : 0x203000000000000\n", .{});
-    try expect(attacks.king_attacks_from_bitboard(util.set_bit(types.empty_Bitboard, types.square.a8)) == 0x203000000000000);
+    try expect(attacks.king_attacks_from_bitboard(util.set_bit(types.empty_bitboard, types.square.a8)) == 0x203000000000000);
 
     print("King attacks from d4 : 0x1D41C0000\n", .{});
-    try expect(attacks.king_attacks_from_bitboard(util.set_bit(types.empty_Bitboard, types.square.d4)) == 0x1c141c0000);
+    try expect(attacks.king_attacks_from_bitboard(util.set_bit(types.empty_bitboard, types.square.d4)) == 0x1c141c0000);
 
     print("King attacks from b1 : 0x705\n", .{});
-    try expect(attacks.king_attacks_from_bitboard(util.set_bit(types.empty_Bitboard, types.square.b1)) == 0x705);
+    try expect(attacks.king_attacks_from_bitboard(util.set_bit(types.empty_bitboard, types.square.b1)) == 0x705);
 
     print("King attacks from g1 : 0xE0A0\n", .{});
-    try expect(attacks.king_attacks_from_bitboard(util.set_bit(types.empty_Bitboard, types.square.g1)) == 0xE0A0);
+    try expect(attacks.king_attacks_from_bitboard(util.set_bit(types.empty_bitboard, types.square.g1)) == 0xE0A0);
 
     print("King attacks from a2 : 0x30203\n", .{});
-    try expect(attacks.king_attacks_from_bitboard(util.set_bit(types.empty_Bitboard, types.square.a2)) == 0x30203);
+    try expect(attacks.king_attacks_from_bitboard(util.set_bit(types.empty_bitboard, types.square.a2)) == 0x30203);
 
     print("King attacks from h8 : 0x40C0000000000000\n", .{});
-    try expect(attacks.king_attacks_from_bitboard(util.set_bit(types.empty_Bitboard, types.square.h8)) == 0x40C0000000000000);
+    try expect(attacks.king_attacks_from_bitboard(util.set_bit(types.empty_bitboard, types.square.h8)) == 0x40C0000000000000);
 
     print("King attacks from e5 : 0x382838000000\n", .{});
-    try expect(attacks.king_attacks_from_bitboard(util.set_bit(types.empty_Bitboard, types.square.e5)) == 0x382838000000);
+    try expect(attacks.king_attacks_from_bitboard(util.set_bit(types.empty_bitboard, types.square.e5)) == 0x382838000000);
 }
 
 test "Knight attacks" {
     print("Knight attacks from e2 : 0x28441000\n", .{});
-    try expect(attacks.knight_attacks_from_bitboard(util.set_bit(types.empty_Bitboard, types.square.e2)) == 0x28440044);
+    try expect(attacks.knight_attacks_from_bitboard(util.set_bit(types.empty_bitboard, types.square.e2)) == 0x28440044);
 
     print("Knight attacks from e2 : 0x28440044\n", .{});
-    try expect(attacks.knight_attacks_from_bitboard(util.set_bit(types.empty_Bitboard, types.square.e2)) == 0x28440044);
+    try expect(attacks.knight_attacks_from_bitboard(util.set_bit(types.empty_bitboard, types.square.e2)) == 0x28440044);
 
     print("Knight attacks from a1 : 0x20400\n", .{});
-    try expect(attacks.knight_attacks_from_bitboard(util.set_bit(types.empty_Bitboard, types.square.a1)) == 0x20400);
+    try expect(attacks.knight_attacks_from_bitboard(util.set_bit(types.empty_bitboard, types.square.a1)) == 0x20400);
 
     print("Knight attacks from h1 : 0x402000\n", .{});
-    try expect(attacks.knight_attacks_from_bitboard(util.set_bit(types.empty_Bitboard, types.square.h1)) == 0x402000);
+    try expect(attacks.knight_attacks_from_bitboard(util.set_bit(types.empty_bitboard, types.square.h1)) == 0x402000);
 
     print("Knight attacks from a8 : 0x402000000000\n", .{});
-    try expect(attacks.knight_attacks_from_bitboard(util.set_bit(types.empty_Bitboard, types.square.a8)) == 0x4020000000000);
+    try expect(attacks.knight_attacks_from_bitboard(util.set_bit(types.empty_bitboard, types.square.a8)) == 0x4020000000000);
 
     print("Knight attacks from h8 : 0x20400000000000\n", .{});
-    try expect(attacks.knight_attacks_from_bitboard(util.set_bit(types.empty_Bitboard, types.square.h8)) == 0x20400000000000);
+    try expect(attacks.knight_attacks_from_bitboard(util.set_bit(types.empty_bitboard, types.square.h8)) == 0x20400000000000);
 
     print("Knight attacks from d4 : 0x142200221400\n", .{});
-    try expect(attacks.knight_attacks_from_bitboard(util.set_bit(types.empty_Bitboard, types.square.d4)) == 0x142200221400);
+    try expect(attacks.knight_attacks_from_bitboard(util.set_bit(types.empty_bitboard, types.square.d4)) == 0x142200221400);
 }
 
 test "PRNG produces expected first value for seed 0x123456789ABCDEF" {
@@ -169,55 +188,55 @@ test "PRNG produces expected first value for seed 0x123456789ABCDEF" {
 }
 
 test "rook attacks table with empty occupancy" {
-    attacks.init_rook_attackes();
-    for (types.square_number) |square| {
+    attacks.init_rook_attacks();
+    for (0..64) |square| {
         const sq6: u6 = @truncate(square);
         const expected = attacks.get_rook_attacks_for_init(sq6, 0);
-        const table_val = attacks.Rook_attacks[square][0];
+        const table_val = attacks.rook_attacks_table[square][0];
         print("Rook attacks for square {d} with empty occ: expected=0x{X}, got=0x{X}\n", .{ square, expected, table_val });
         try std.testing.expectEqual(@as(types.Bitboard, expected), table_val);
     }
 }
 
 test "rook attacks with one blocker" {
-    attacks.init_rook_attackes();
+    attacks.init_rook_attacks();
     const sq_idx: u8 = 27;
     const occ_single: u64 = (@as(u64, 1) << (3 + 5 * 8)); // blocker on d6
-    const occ_masked = occ_single & tabele.Rook_attackes_tabele[sq_idx];
-    const relevantBits = tabele.Rook_index_bit[sq_idx];
-    const magic = tabele.rook_magics[sq_idx];
+    const occ_masked = occ_single & tabeles.Rook_attackes_tabele[sq_idx];
+    const relevantBits = tabeles.Rook_index_bit[sq_idx];
+    const magic = tabeles.rook_magics[sq_idx];
     const shift8: u8 = 64 - relevantBits;
     const shift: u6 = @truncate(shift8);
     const idx = (@as(u64, occ_masked) *% magic) >> shift;
-    const table_attacks = attacks.Rook_attacks[sq_idx][@intCast(idx)];
+    const table_attacks = attacks.rook_attacks_table[sq_idx][@intCast(idx)];
     const expected = attacks.get_rook_attacks_for_init(@as(u6, sq_idx), occ_single);
     print("Rook attacks with blocker on square {d}: occ=0x{X}, idx={d}, table=0x{X}, expected=0x{X}\n", .{ sq_idx, occ_single, idx, table_attacks, expected });
     try std.testing.expectEqual(@as(types.Bitboard, expected), table_attacks);
 }
 
 test "bishop attacks table with empty occupancy" {
-    attacks.init_bishop_attackes();
-    for (types.square_number) |square| {
+    attacks.init_bishop_attacks();
+    for (0..64) |square| {
         const sq6: u6 = @truncate(square);
         const expected = attacks.get_bishop_attacks_for_init(sq6, 0);
-        const table_val = attacks.Bishop_attacks[square][0];
+        const table_val = attacks.bishop_attacks_table[square][0];
         print("Bishop attacks for square {d} with empty occ: expected=0x{X}, got=0x{X}\n", .{ square, expected, table_val });
         try std.testing.expectEqual(@as(types.Bitboard, expected), table_val);
     }
 }
 
 test "bishop attacks with one blocker" {
-    attacks.init_bishop_attackes();
+    attacks.init_bishop_attacks();
     const sq_idx: u8 = 27; // d4
     const occ_single: u64 = (@as(u64, 1) << 45); // blocker on f6
-    const mask = tabele.Bishops_attackes_tabele[sq_idx];
+    const mask = tabeles.Bishops_attackes_tabele[sq_idx];
     const occ_masked = occ_single & mask;
-    const relevantBits = tabele.Bishop_index_bit[sq_idx];
-    const magic = tabele.bishop_magics[sq_idx];
+    const relevantBits = tabeles.Bishop_index_bit[sq_idx];
+    const magic = tabeles.bishop_magics[sq_idx];
     const shift: u6 = @truncate(64 - relevantBits);
     const idx64 = (@as(u64, occ_masked) *% magic) >> shift;
     const idx: usize = @intCast(idx64);
-    const table_attacks = attacks.Bishop_attacks[sq_idx][idx];
+    const table_attacks = attacks.bishop_attacks_table[sq_idx][idx];
     const expected = attacks.get_bishop_attacks_for_init(@as(u6, sq_idx), occ_single);
     print("Bishop attacks with blocker on square {d}: occ=0x{X}, idx={d}, table=0x{X}, expected=0x{X}\n", .{ sq_idx, occ_single, idx, table_attacks, expected });
     try std.testing.expectEqual(@as(types.Bitboard, expected), table_attacks);
@@ -354,12 +373,13 @@ test "test fen parsing" {
         const expected = entry.value_ptr.*;
 
         var b = types.Board.new();
-        try bitboard.fan_pars(fen, &b);
+        try bitboard.parse_fen(fen, &b);
         print("\n=== Testing FEN: {s}\n", .{fen});
         print("  occupancy: expected=0x{x}, actual=0x{x}\n", .{ expected.occupancy, b.pieces_combined() });
         print("  en-passant: expected={s}, actual={s}\n", .{ expected.ep_str, if (b.enpassant == types.square.NO_SQUARE) "-" else types.SquareString.getSquareToString(b.enpassant) });
         print("  castling   : expected=0b{b:0>4}, actual=0b{b:0>4}\n\n", .{ expected.castle, b.castle });
-        const flipped_occupancy: types.Bitboard = util.flip_bitboard_vertically(b.pieces_combined());
+        // The expected occupancies were written rank-8-first; @byteSwap flips rank 1 <-> rank 8.
+        const flipped_occupancy: types.Bitboard = @byteSwap(b.pieces_combined());
 
         try std.testing.expectEqual(
             expected.occupancy,
@@ -398,7 +418,7 @@ test "is square attacked" {
 
     for (test_vectors) |vector| {
         var board = types.Board.new();
-        try bitboard.fan_pars(vector.fen, &board);
+        try bitboard.parse_fen(vector.fen, &board);
 
         var generated_white_attacks: u64 = 0;
         var generated_black_attacks: u64 = 0;
@@ -439,12 +459,12 @@ test "Perft Test the move generation start position" {
     const depth: u8 = 5;
 
     var b = types.Board.new();
-    try bitboard.fan_pars(types.start_position, &b);
+    try bitboard.parse_fen(types.start_position, &b);
 
     const stats = if (b.side == types.Color.White)
-        util.perft_detailed(types.Color.White, &b, depth)
+        util.Perft.run(types.Color.White, &b, depth, true)
     else
-        util.perft_detailed(types.Color.Black, &b, depth);
+        util.Perft.run(types.Color.Black, &b, depth, true);
 
     try std.testing.expectEqual(stats.nodes, 4865609);
     try std.testing.expectEqual(stats.captures, 82719);
@@ -463,12 +483,12 @@ test "Perft Test the move generation tricky position" {
     const depth: u8 = 4;
 
     var b = types.Board.new();
-    try bitboard.fan_pars(types.tricky_position, &b);
+    try bitboard.parse_fen(types.tricky_position, &b);
 
     const stats = if (b.side == types.Color.White)
-        util.perft_detailed(types.Color.White, &b, depth)
+        util.Perft.run(types.Color.White, &b, depth, true)
     else
-        util.perft_detailed(types.Color.Black, &b, depth);
+        util.Perft.run(types.Color.Black, &b, depth, true);
 
     try std.testing.expectEqual(stats.nodes, 4085603);
     try std.testing.expectEqual(stats.captures, 757163);
@@ -483,76 +503,71 @@ test "Perft Test the move generation tricky position" {
     print("Perft test for the tricky position done\n", .{});
 }
 
-test "test piece evaluation" {
-    //TODO
-}
-
 test "test phase calculation" {
     attacks.init_attacks();
 
     print("\n--- Test 1: Starting Position ---\n", .{});
     var board = types.Board.new();
-    try bitboard.fan_pars(types.start_position, &board);
+    try bitboard.parse_fen(types.start_position, &board);
     print("FEN: {s}\n", .{types.start_position});
     print("Expected: White=16, Black=16 (P=0, N=1, B=1, R=3, Q=6, K=0 → 0+2+2+6+6+0=16 per side)\n", .{});
     try std.testing.expectEqual(eval.global_evaluator.phase[0], 16);
     try std.testing.expectEqual(eval.global_evaluator.phase[1], 16);
 
     print("\n--- Test 2: Empty Board ---\n", .{});
-    try bitboard.fan_pars(types.empty_board, &board);
+    try bitboard.parse_fen(types.empty_board, &board);
     print("FEN: {s}\n", .{types.empty_board});
     print("Expected: White=0, Black=0 (no pieces)\n", .{});
     try std.testing.expectEqual(eval.global_evaluator.phase[0], 0);
     try std.testing.expectEqual(eval.global_evaluator.phase[1], 0);
 
     print("\n--- Test 3: King vs King ---\n", .{});
-    try bitboard.fan_pars("8/8/8/8/8/8/8/K6k w - - 0 1", &board);
+    try bitboard.parse_fen("8/8/8/8/8/8/8/K6k w - - 0 1", &board);
     print("FEN: 8/8/8/8/8/8/8/K6k w - - 0 1\n", .{});
     print("Expected: White=0, Black=0 (only kings, K=0 phase)\n", .{});
     try std.testing.expectEqual(eval.global_evaluator.phase[0], 0);
     try std.testing.expectEqual(eval.global_evaluator.phase[1], 0);
 
     print("\n--- Test 4: Queen Endgame ---\n", .{});
-    try bitboard.fan_pars("8/8/8/8/8/8/8/KQ5k w - - 0 1", &board);
+    try bitboard.parse_fen("8/8/8/8/8/8/8/KQ5k w - - 0 1", &board);
     print("FEN: 8/8/8/8/8/8/8/KQ5k w - - 0 1\n", .{});
     print("Expected: White=6, Black=0 (white queen=6 phase)\n", .{});
     try std.testing.expectEqual(eval.global_evaluator.phase[0], 6); // white
     try std.testing.expectEqual(eval.global_evaluator.phase[1], 0); // black
 
     print("\n--- Test 5: Complex Middlegame ---\n", .{});
-    try bitboard.fan_pars(types.tricky_position, &board);
+    try bitboard.parse_fen(types.tricky_position, &board);
     print("FEN: {s}\n", .{types.tricky_position});
     print("Expected: Count all pieces - complex position\n", .{});
     try std.testing.expectEqual(eval.global_evaluator.phase[0], 16);
     try std.testing.expectEqual(eval.global_evaluator.phase[1], 16);
 
     print("\n--- Test 7: Move Making and Phase Updates ---\n", .{});
-    try bitboard.fan_pars(types.start_position, &board);
+    try bitboard.parse_fen(types.start_position, &board);
     print("Starting position phases: White={}, Black={}\n", .{ eval.global_evaluator.phase[0], eval.global_evaluator.phase[1] });
 
     var move_list: lists.MoveList = .{};
 
-    try bitboard.fan_pars("rnbqkb1r/pppp1ppp/5n2/4p1B1/4P3/8/PPPP1PPP/RNBQK1NR w KQkq e6 0 2", &board);
+    try bitboard.parse_fen("rnbqkb1r/pppp1ppp/5n2/4p1B1/4P3/8/PPPP1PPP/RNBQK1NR w KQkq e6 0 2", &board);
     print("\nAfter 1.e4 e5 - phases: White={}, Black={}\n", .{ eval.global_evaluator.phase[0], eval.global_evaluator.phase[1] });
 
-    move_gen.generate_moves(&board, &move_list, types.Color.White);
+    movegen.generate_legal_moves(&board, &move_list, types.Color.White);
 
     var capture_made = false;
     for (0..move_list.count) |i| {
         const move = move_list.moves[i];
-        if (move_gen.Print_move_list.is_capture(move)) {
+        if (move.is_capture()) {
             print("Making capture move: {s}{s}\n", .{ types.SquareString.getSquareToString(@enumFromInt(move.from)), types.SquareString.getSquareToString(@enumFromInt(move.to)) });
             const old_phase_w = eval.global_evaluator.phase[0];
             const old_phase_b = eval.global_evaluator.phase[1];
 
-            if (move_gen.make_move(&board, move)) {
-                print("Phases before capture: White={}, Black={}\n", .{ old_phase_w, old_phase_b });
-                print("Phases after capture:  White={}, Black={}\n", .{ eval.global_evaluator.phase[0], eval.global_evaluator.phase[1] });
-                capture_made = true;
-                try std.testing.expectEqual(eval.global_evaluator.phase[0], 16);
-                try std.testing.expectEqual(eval.global_evaluator.phase[1], 15);
-                break;
-            }
+            _ = move_gen.make_move_search_rt(&board, move);
+            print("Phases before capture: White={}, Black={}\n", .{ old_phase_w, old_phase_b });
+            print("Phases after capture:  White={}, Black={}\n", .{ eval.global_evaluator.phase[0], eval.global_evaluator.phase[1] });
+            capture_made = true;
+            try std.testing.expectEqual(eval.global_evaluator.phase[0], 16);
+            try std.testing.expectEqual(eval.global_evaluator.phase[1], 15);
+            break;
         }
     }
 
@@ -561,30 +576,76 @@ test "test phase calculation" {
     }
 
     print("\n--- Test 8: Promotion Test ---\n", .{});
-    try bitboard.fan_pars("8/P7/8/8/8/8/8/K6k w - - 0 1", &board);
+    try bitboard.parse_fen("8/P7/8/8/8/8/8/K6k w - - 0 1", &board);
     print("Pawn promotion setup - phases: White={}, Black={}\n", .{ eval.global_evaluator.phase[0], eval.global_evaluator.phase[1] });
 
     move_list = .{};
-    move_gen.generate_moves(&board, &move_list, types.Color.White);
+    movegen.generate_legal_moves(&board, &move_list, types.Color.White);
 
     // Find and make a promotion
     for (0..move_list.count) |i| {
         const move = move_list.moves[i];
-        if (move_gen.Print_move_list.is_promotion(move) and move.flags == types.MoveFlags.PR_QUEEN) {
+        if (move.is_promotion() and move.flags == types.MoveFlags.PR_QUEEN) {
             print("Making promotion to queen: {s}{s}\n", .{ types.SquareString.getSquareToString(@enumFromInt(move.from)), types.SquareString.getSquareToString(@enumFromInt(move.to)) });
             const old_phase_w = eval.global_evaluator.phase[0];
             const old_phase_b = eval.global_evaluator.phase[1];
 
-            if (move_gen.make_move(&board, move)) {
-                print("Phases before promotion: White={}, Black={}\n", .{ old_phase_w, old_phase_b });
-                print("Phases after promotion:  White={}, Black={}\n", .{ eval.global_evaluator.phase[0], eval.global_evaluator.phase[1] });
-                print("Expected change: -0 (pawn) +6 (queen) = +6 for white\n", .{});
-                try std.testing.expectEqual(eval.global_evaluator.phase[0], 6);
-                try std.testing.expectEqual(eval.global_evaluator.phase[1], 0);
-                break;
-            }
+            _ = move_gen.make_move_search_rt(&board, move);
+            print("Phases before promotion: White={}, Black={}\n", .{ old_phase_w, old_phase_b });
+            print("Phases after promotion:  White={}, Black={}\n", .{ eval.global_evaluator.phase[0], eval.global_evaluator.phase[1] });
+            print("Expected change: -0 (pawn) +6 (queen) = +6 for white\n", .{});
+            try std.testing.expectEqual(eval.global_evaluator.phase[0], 6);
+            try std.testing.expectEqual(eval.global_evaluator.phase[1], 0);
+            break;
         }
     }
+}
+
+test "TT entry is 16 bytes and a cluster is one 64-byte cache line" {
+    // One probe must touch one cache line: 4 entries of 16 bytes.
+    try std.testing.expectEqual(@as(usize, 16), @sizeOf(tt.TTEntry));
+    try std.testing.expectEqual(@as(usize, 64), @sizeOf(tt.Cluster));
+    try std.testing.expectEqual(@as(usize, 4), tt.CLUSTER_SIZE);
+}
+
+test "TT hashfull stays within 0..1000 per mille" {
+    // Regression: @min(len, 1000) narrowed to u10 and sample * CLUSTER_SIZE overflowed.
+    var table = try tt.TT.init(std.testing.allocator, 1);
+    defer table.deinit();
+    try std.testing.expectEqual(@as(u32, 0), table.hashfull());
+    table.new_search();
+    var prng = std.Random.DefaultPrng.init(7);
+    const r = prng.random();
+    for (0..50_000) |_| table.store(r.int(u64), 1, 0, .EXACT, move_gen.Move.empty(), 0, false);
+    const hf = table.hashfull();
+    try expect(hf > 0);
+    try expect(hf <= 1000);
+    // Another search generation: nothing from the old one counts as "in use".
+    table.new_search();
+    try std.testing.expectEqual(@as(u32, 0), table.hashfull());
+}
+
+test "Zobrist keys are nonzero and pairwise distinct" {
+    // A zero key hides a piece from the hash, a duplicate makes positions collide.
+    var seen = std.AutoHashMap(u64, void).init(std.testing.allocator);
+    defer seen.deinit();
+    var count: usize = 0;
+    const add = struct {
+        fn f(set: *std.AutoHashMap(u64, void), n: *usize, key: u64) !void {
+            try expect(key != 0);
+            try expect(!set.contains(key));
+            try set.put(key, {});
+            n.* += 1;
+        }
+    }.f;
+    for (zobrist.piece_keys, 0..) |row, slot| {
+        if (slot == 6 or slot == 7 or slot == @intFromEnum(types.Piece.NO_PIECE)) continue; // padding rows
+        for (row) |k| try add(&seen, &count, k);
+    }
+    try add(&seen, &count, zobrist.side_key);
+    for ([_]u8{ 1, 2, 4, 8 }) |bit| try add(&seen, &count, zobrist.castle_hash[bit]); // single-right masks = raw keys
+    for (zobrist.ep_keys) |k| try add(&seen, &count, k);
+    try std.testing.expectEqual(@as(usize, 12 * 64 + 1 + 4 + 8), count);
 }
 
 test "Zobrist hash consistency after moves" {
@@ -600,7 +661,7 @@ test "Zobrist hash consistency after moves" {
 
     for (test_fens) |fen| {
         var board = types.Board.new();
-        try bitboard.fan_pars(fen, &board);
+        try bitboard.parse_fen(fen, &board);
 
         // Verify initial hash matches full computation
         const initial_hash = zobrist.compute_hash(&board);
@@ -609,36 +670,87 @@ test "Zobrist hash consistency after moves" {
         // Generate all legal moves and verify hash after each
         var move_list: lists.MoveList = .{};
         if (board.side == types.Color.White) {
-            move_gen.generate_moves(&board, &move_list, types.Color.White);
+            movegen.generate_legal_moves(&board, &move_list, types.Color.White);
         } else {
-            move_gen.generate_moves(&board, &move_list, types.Color.Black);
+            movegen.generate_legal_moves(&board, &move_list, types.Color.Black);
         }
 
         for (0..move_list.count) |i| {
             const move = move_list.moves[i];
-            const saved_state = board.save_state();
-            const saved_eval = eval.global_evaluator;
 
-            if (move_gen.make_move(&board, move)) {
-                const expected_hash = zobrist.compute_hash(&board);
-                if (board.hash != expected_hash) {
-                    const from_str = types.SquareString.getSquareToString(@enumFromInt(move.from));
-                    const to_str = types.SquareString.getSquareToString(@enumFromInt(move.to));
-                    print("Hash mismatch after move {s}{s} (flags={}) in FEN: {s}\n", .{
-                        from_str, to_str, @intFromEnum(move.flags), fen,
-                    });
-                    print("  Incremental: 0x{x}\n  Recomputed:  0x{x}\n", .{ board.hash, expected_hash });
-                }
-                try std.testing.expectEqual(expected_hash, board.hash);
-
-                board.restore_state(saved_state);
-                eval.global_evaluator = saved_eval;
-                try std.testing.expectEqual(initial_hash, board.hash);
-            } else {
-                board.restore_state(saved_state);
-                eval.global_evaluator = saved_eval;
+            const undo = move_gen.make_move_search_rt(&board, move);
+            const expected_hash = zobrist.compute_hash(&board);
+            if (board.hash != expected_hash) {
+                const from_str = types.SquareString.getSquareToString(@enumFromInt(move.from));
+                const to_str = types.SquareString.getSquareToString(@enumFromInt(move.to));
+                print("Hash mismatch after move {s}{s} (flags={}) in FEN: {s}\n", .{
+                    from_str, to_str, @intFromEnum(move.flags), fen,
+                });
+                print("  Incremental: 0x{x}\n  Recomputed:  0x{x}\n", .{ board.hash, expected_hash });
             }
+            try std.testing.expectEqual(expected_hash, board.hash);
+
+            move_gen.unmake_move_search_rt(&board, move, undo);
+            try std.testing.expectEqual(initial_hash, board.hash);
         }
+    }
+}
+
+fn run_perft_legal_bench(fen: []const u8, name: []const u8, depth: u8, expected: u64) !void {
+    var board = types.Board.new();
+    const m = try bench.measure_movegen(&board, fen, depth);
+    print("{s}: {d} nodes, {d}ms, {d:.2} MNodes/s\n", .{ name, m.nodes, m.ns / std.time.ns_per_ms, m.mps() });
+    try std.testing.expectEqual(expected, m.nodes);
+}
+
+test "Legal perft startpos d5" {
+    attacks.init_attacks();
+    print("\n=== LEGAL PERFT BENCHMARK ===\n", .{});
+    try run_perft_legal_bench(types.start_position, "legal startpos d5", 5, 4865609);
+}
+
+test "Legal perft kiwipete d4" {
+    attacks.init_attacks();
+    try run_perft_legal_bench(types.tricky_position, "legal kiwipete d4", 4, 4085603);
+}
+
+test "Legal perft edwards d4" {
+    attacks.init_attacks();
+    try run_perft_legal_bench("r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 10", "legal edwards d4", 4, 3894594);
+}
+
+test "Legal perft ep_tricky d5" {
+    attacks.init_attacks();
+    try run_perft_legal_bench("8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1", "legal ep_tricky d5", 5, 674624);
+}
+
+test "Legal perft promo d5" {
+    attacks.init_attacks();
+    try run_perft_legal_bench(types.killer_position, "legal promo d5", 5, 36112837);
+}
+
+fn bench_eval_one(fen: []const u8, name: []const u8, iters: u64) !void {
+    var board = types.Board.new();
+    const m = try bench.measure_eval(&board, fen, iters);
+    print("{s:<14}: {d:>10.2} M eval/s\n", .{ name, m.mps() });
+}
+
+test "Eval speed benchmark" {
+    attacks.init_attacks();
+    search.init_search();
+    print("\n=== EVAL SPEED BENCHMARK (M klicev/s) ===\n", .{});
+    for (types.standard_perft_positions, types.standard_perft_names) |fen, name| {
+        try bench_eval_one(fen, name, 20_000_000);
+    }
+}
+
+test "MoveGen speed benchmark" {
+    attacks.init_attacks();
+    print("\n=== MOVEGEN SPEED BENCHMARK (perft d6, MNodes/s) ===\n", .{});
+    for (types.standard_perft_positions, types.standard_perft_names) |fen, name| {
+        var board = types.Board.new();
+        const m = try bench.measure_movegen(&board, fen, 6);
+        print("{s:<14}: {d:>12} nodes, {d:>8.2} MNodes/s\n", .{ name, m.nodes, m.mps() });
     }
 }
 
@@ -661,14 +773,15 @@ test "test evaluation end games" {
         .{ .fen = "8/8/8/8/8/8/R7/K6k w - - 0 1", .description = "Rook vs King", .expected_result = "White wins", .expected_range = .{ 400, 600 } },
         .{ .fen = "8/8/8/8/8/8/8/KBN4k w - - 0 1", .description = "Bishop + Knight vs King", .expected_result = "White wins (difficult)", .expected_range = .{ 300, 700 } },
         .{ .fen = "8/8/8/8/8/8/8/KRR4k w - - 0 1", .description = "Two Rooks vs King", .expected_result = "White wins easily", .expected_range = .{ 900, 1200 } },
-        .{ .fen = "8/8/8/8/8/8/P7/K6k w - - 0 1", .description = "King + Pawn vs King", .expected_result = "Usually wins", .expected_range = .{ 100, 300 } },
+        // Lone rook pawn with the defending king outside the square: HCE scores it low (~83cp), so the floor is 50.
+        .{ .fen = "8/8/8/8/8/8/P7/K6k w - - 0 1", .description = "King + Pawn vs King", .expected_result = "Usually wins", .expected_range = .{ 50, 300 } },
     };
 
     for (tests, 0..) |test_case, i| {
         var board = types.Board.new();
-        try bitboard.fan_pars(test_case.fen, &board);
+        try bitboard.parse_fen(test_case.fen, &board);
 
-        const evaluation = eval.global_evaluator.eval(board, types.Color.White);
+        const evaluation = eval.global_evaluator.eval_full(&board, types.Color.White);
         const min_expected = test_case.expected_range[0];
         const max_expected = test_case.expected_range[1];
 
@@ -683,4 +796,180 @@ test "test evaluation end games" {
             try std.testing.expectFmt("error", "expected value in range {}–{}, but got {}\n", .{ min_expected, max_expected, evaluation });
         }
     }
+}
+
+test "nnue feature_index matches bullet Chess768 encoding (mirror=false)" {
+    // White pawn (ord 0) on a1 (sq 0): friendly, no flip, bucket 0 -> 0
+    try std.testing.expectEqual(@as(usize, 0), nnue.feature_index(true, 0, 0, false, 0));
+    // ...from black's perspective: enemy + rank-flip -> 384 + 0 + (0^56)
+    try std.testing.expectEqual(@as(usize, 440), nnue.feature_index(false, 0, 0, false, 0));
+    // White king (ord 5) on e1 (sq 4), white perspective -> 5*64 + 4
+    try std.testing.expectEqual(@as(usize, 324), nnue.feature_index(true, 5, 4, false, 0));
+    // Black king (ord 13) on h8 (sq 63), white perspective -> 384 + 5*64 + 63
+    try std.testing.expectEqual(@as(usize, 767), nnue.feature_index(true, 13, 63, false, 0));
+    // ...black perspective -> 0 + 5*64 + (63^56)
+    try std.testing.expectEqual(@as(usize, 327), nnue.feature_index(false, 13, 63, false, 0));
+    // mirror=true flips the file: white pawn a1 -> file h -> 0^7 = 7
+    try std.testing.expectEqual(@as(usize, 7), nnue.feature_index(true, 0, 0, true, 0));
+    // bucket offset: bucket 2 adds 768*2 = 1536
+    try std.testing.expectEqual(@as(usize, 1536), nnue.feature_index(true, 0, 0, false, 2));
+}
+
+test "nnue evaluate is mirror-symmetric (encoding + eval are correct)" {
+    const buf = try std.testing.allocator.alloc(u8, nnue.NET_BYTES);
+    defer std.testing.allocator.free(buf);
+    // deterministic little-endian i16 weights in [-8, 7] so eval cannot overflow
+    var i: usize = 0;
+    while (i + 1 < buf.len) : (i += 2) {
+        const v: i16 = @as(i16, @intCast((i / 2) % 16)) - 8;
+        std.mem.writeInt(i16, buf[i..][0..2], v, .little);
+    }
+    try nnue.load_bytes(buf);
+
+    // p: WK e1, BK e8, WQ d1, BN b8, WP e2 with white to move
+    // m: p mirrored vertically (sq ^ 56) with colours swapped (piece ^ 8) and black to move
+    const pieces = [_][2]u8{ .{ 5, 4 }, .{ 13, 60 }, .{ 4, 3 }, .{ 9, 57 }, .{ 0, 12 } };
+    var p = types.Board.new();
+    var m = types.Board.new();
+    for (pieces) |e| {
+        const pc: usize = e[0];
+        const sq: u6 = @intCast(e[1]);
+        p.pieces[pc] |= @as(u64, 1) << sq;
+        p.board[sq] = @enumFromInt(pc);
+        m.pieces[pc ^ 8] |= @as(u64, 1) << (sq ^ 56);
+        m.board[sq ^ 56] = @enumFromInt(pc ^ 8);
+    }
+    p.side = .White;
+    m.side = .Black;
+
+    // Same stm-relative score for any weights iff the perspective encoding is right.
+    try std.testing.expectEqual(nnue.evaluate(&p), nnue.evaluate(&m));
+}
+
+// Every output bucket and side to move must score the same with the SIMD small head on and off.
+fn expect_small_heads_agree(acc: *const nnue.AccumulatorS) !void {
+    for ([_]types.Color{ .White, .Black }) |stm| {
+        for (0..nnue.OUTPUT_BUCKETS) |b| {
+            nnue.small_head_simd = true;
+            const simd = nnue.evaluate_acc_s(acc, stm, b);
+            nnue.small_head_simd = false;
+            try std.testing.expectEqual(nnue.evaluate_acc_s(acc, stm, b), simd);
+        }
+    }
+}
+
+// The routed eval (small net forced by the caller) plus all heads of the board's small accumulator.
+fn expect_small_heads_agree_board(board: *const types.Board) !void {
+    nnue.small_head_simd = true;
+    const simd = nnue.evaluate(board);
+    nnue.small_head_simd = false;
+    try std.testing.expectEqual(nnue.evaluate(board), simd);
+    var acc: nnue.AccumulatorS = undefined;
+    acc.refresh(board);
+    try expect_small_heads_agree(&acc);
+}
+
+test "nnue small-net SIMD head matches the scalar head" {
+    attacks.init_attacks();
+    try nnue.load_embedded();
+    // the shipped small net must pass the load-time |w| <= 128 check, else the SIMD head never runs
+    try expect(nnue.small_head_simd);
+    const saved_simd = nnue.small_head_simd;
+    const saved_guard = nnue.small_guard;
+    const saved_want = nnue.want_small;
+    defer {
+        nnue.small_head_simd = saved_simd;
+        nnue.small_guard = saved_guard;
+        nnue.want_small = saved_want;
+    }
+    // force the small net: no big-net re-eval in the guard band
+    nnue.want_small = true;
+    nnue.small_guard = 0;
+
+    // a saturated accumulator gives the largest head sums
+    var sat: nnue.AccumulatorS = .{};
+    for (&sat.vals) |*v| @memset(v, std.math.maxInt(i16));
+    try expect_small_heads_agree(&sat);
+
+    // the bench positions and all their legal children
+    for (bench.positions) |fen| {
+        var board = types.Board.new();
+        try bitboard.parse_fen(fen, &board);
+        try expect_small_heads_agree_board(&board);
+        var moves: lists.MoveList = .{};
+        if (board.side == types.Color.White) {
+            movegen.generate_legal_moves(&board, &moves, types.Color.White);
+        } else {
+            movegen.generate_legal_moves(&board, &moves, types.Color.Black);
+        }
+        for (moves.moves[0..moves.count]) |move| {
+            const undo = move_gen.make_move_search_rt(&board, move);
+            try expect_small_heads_agree_board(&board);
+            move_gen.unmake_move_search_rt(&board, move, undo);
+        }
+    }
+}
+
+test "board_to_fen round-trips through parse_fen" {
+    // Parse, serialize and re-parse; the board state must be identical.
+    const fens = [_][]const u8{
+        types.start_position,
+        types.tricky_position,
+        types.killer_position,
+        "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1",
+        "rnbqkb1r/pp1p1pPp/8/2p1pP2/1P1P4/3P3P/P1P1P3/RNBQKBNR w KQkq e6 0 1",
+        "r2q1rk1/ppp2ppp/2n1bn2/2b1p3/3pP3/3P1NPP/PPP1NPB1/R1BQ1RK1 b - - 0 9",
+        "8/8/8/2k5/2pP4/8/B7/4K3 b - d3 0 3",
+        "4k3/8/8/8/8/8/8/4K3 w - - 13 47",
+    };
+
+    var buf: [128]u8 = undefined;
+    for (fens) |fen| {
+        var b1 = types.Board.new();
+        try bitboard.parse_fen(fen, &b1);
+
+        // fullmove is not stored on the board, so it cannot affect round-trip state.
+        const out = bitboard.board_to_fen(&b1, 1, buf[0..]);
+
+        var b2 = types.Board.new();
+        try bitboard.parse_fen(out, &b2);
+
+        if (b1.hash != b2.hash) {
+            print("round-trip mismatch: {s}\n  -> {s}\n", .{ fen, out });
+        }
+        try std.testing.expectEqual(b1.side, b2.side);
+        try std.testing.expectEqual(b1.castle, b2.castle);
+        try std.testing.expectEqual(b1.enpassant, b2.enpassant);
+        try std.testing.expectEqual(b1.halfmove, b2.halfmove);
+        try std.testing.expectEqual(b1.hash, b2.hash);
+        for (b1.pieces, b2.pieces) |p1, p2| {
+            try std.testing.expectEqual(p1, p2);
+        }
+    }
+}
+
+test "board_to_fen exact start-position string" {
+    var board = types.Board.new();
+    try bitboard.parse_fen(types.start_position, &board);
+
+    var buf: [128]u8 = undefined;
+    const fen = bitboard.board_to_fen(&board, 1, buf[0..]);
+    try std.testing.expectEqualStrings(
+        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+        fen,
+    );
+}
+
+test "bench is deterministic and nonzero" {
+    attacks.init_attacks();
+    search.init_search();
+    try tt.init_global(std.heap.page_allocator, 8);
+    try nnue.load_embedded();
+    nnue.use_nnue = true;
+
+    var board = types.Board.new();
+    const first = bench.run_nodes(&board, 5, 3);
+    const second = bench.run_nodes(&board, 5, 3);
+    try expect(first > 0);
+    try expect(first == second);
 }

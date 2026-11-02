@@ -1,6 +1,6 @@
 <div align="center">
     <h1>NeuroSpeed</h1>
-    <img src="https://github.com/lovc21/NeroSpeed/blob/main/.docs/img/nerospeed.jpg"
+    <img src=".docs/img/nerospeed.jpg"
          width="400" height="400" alt="Nero speed image">
 </div>
 
@@ -10,55 +10,78 @@ NeuroSpeed is a UCI chess engine that is optimized for extreme time controls. Th
 
 ## Releases
 
-This chess engine is still in development (pre-1.0). A stable v1.0 release will follow once testing and tuning are complete.
+Prebuilt binaries for Windows, Linux and macOS (x86_64 and ARM64) are on the [releases page](https://github.com/lovc21/NeuroSpeed/releases). The NNUE nets are embedded, so the binary is all you need.
 
 ## Strength
 
-| Version | Date       | Estimated Elo |
-|---------|------------|---------------|
-| pre-1.0 | 2026-03-03 | 2100 - 2300   |
+| Version | Date       | Elo                                   |
+| ------- | ---------- | ------------------------------------- |
+| 1.0     | 2026-09-10 | ~3160 ±70 (internal Stockfish-anchored gauntlet, 8+0.08, measured on a pre-release build) |
 
 ## Features
 
 These are the features that were implemented so far:
 
 ```
-Bitboard board representation (LERF mapping)
-Pre-calculated attack tables
-Magic bitboards for sliding piece attacks
-Negamax alpha-beta search
-PVS
-Quiescence search
-Iterative deepening
-Mate distance pruning
-Delta pruning in quiescence
-Check extensions in quiescence
-PV move ordering
-MVV-LVA
-Static Exchange Evaluation
-Killer move heuristic
-History heuristic
-Tapered evaluation
-Piece-square tables
-Material evaluation
-Pawn structure
-Piece mobility
-King safety
-Threat evaluation
-Bishop pair bonus
-Bad bishop penalty
-Knight outpost bonus
-Knight on rim penalty
-Rook on open/semi-open file bonus
-Rook on 7th rank bonus
-Tempo bonus
-KBN vs K corner mating and king distance
-Insufficient material draw detection
+Board and move generation
+  Bitboard board representation (LERF mapping) with a mailbox
+  Pre-calculated attack tables
+  Magic bitboards for sliding piece attacks
+  Legal move generation with check and pin masks
+
+Search
+  Negamax alpha-beta with PVS
+  Iterative deepening with aspiration windows
+  Transposition table (4 entries per 64-byte cluster, prefetching, huge pages on Linux)
+  Quiescence search with SEE pruning and check evasions
+  Mate distance pruning
+  Reverse futility pruning
+  Razoring
+  Null move pruning
+  Futility pruning
+  Late move pruning
+  History pruning
+  SEE pruning
+  Late move reductions
+  Singular extensions with multi-cut
+  Check extensions
+  Internal iterative reductions
+  Repetition and 50-move rule detection
+
+Move ordering
+  TT move
+  MVV-LVA and Static Exchange Evaluation
+  Killer moves
+  History heuristic with gravity
+  Countermove heuristic
+  Continuation history (1 and 2 plies back)
+
+Evaluation
+  NNUE: big net (640 hidden, 8 output buckets) and small net (128 hidden)
+  Router: picks the big net, the small net or the handcrafted eval per position by material imbalance
+  Handcrafted eval (tapered):
+    Piece-square tables and material
+    Pawn structure
+    Piece mobility
+    King safety
+    Threat evaluation
+    Bishop pair bonus and bad bishop penalty
+    Knight outpost bonus and knight on rim penalty
+    Rook on open/semi-open file and on 7th rank
+    Tempo bonus
+    KBN vs K corner mating and king distance
+    Insufficient material draw detection
+
+Time management
+  Soft and hard time limits
+  Soft limit scaled by best-move stability and score trend
+  Less time in decided positions
+  Instant move when only one legal move
 ```
 
 ## How to build
 
-Requires [Zig](https://ziglang.org/download/) (0.14+) and [just](https://github.com/casey/just).
+Requires [Zig](https://ziglang.org/download/) 0.16 or newer and [just](https://github.com/casey/just).
 
 ```bash
 # Build optimized binary for your machine
@@ -67,6 +90,8 @@ just build
 # Build and run the engine in fast mode
 just start
 
+# Without just
+zig build -Doptimize=ReleaseFast -Dcpu=native
 ```
 
 ## Thanks and Acknowledgements

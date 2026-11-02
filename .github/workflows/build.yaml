@@ -27,7 +27,7 @@ jobs:
       
       - uses: goto-bus-stop/setup-zig@v2
         with:
-          version: "0.14.0"
+          version: "0.16.0"
       
       - name: Build engine
         shell: bash
@@ -129,6 +129,7 @@ jobs:
             **Linux:**
             - `NeuroSpeed-x86_64-linux.tar.gz` - Generic x86_64
             - `NeuroSpeed-x86_64-linux-x86_64_v3.tar.gz` - Optimized for modern CPUs
+            - `NeuroSpeed-x86_64-linux-znver5.tar.gz` - Optimized for AMD Zen 5 (AVX-512 VNNI)
             - `NeuroSpeed-aarch64-linux.tar.gz` - Generic ARM64
             - `NeuroSpeed-aarch64-linux-cortex_a76.tar.gz` - Optimized for Cortex-A76
             - `NeuroSpeed-aarch64-linux-neoverse_n1.tar.gz` - Optimized for AWS Graviton

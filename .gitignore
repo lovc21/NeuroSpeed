@@ -4,3 +4,8 @@ zig-out/
 .venv
 CLAUDE.md
 NeuroSpeed
+.direnv/
+
+# nix build output symlinks
+result
+result-*

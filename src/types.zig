@@ -4,13 +4,18 @@ const std = @import("std");
 pub const Bitboard = u64;
 
 // empty Bitboard
-pub const empty_Bitboard: Bitboard = 0;
+pub const empty_bitboard: Bitboard = 0;
 
 // the number of squares on a chess board
 pub const number_of_squares = 64;
 
 // the number of pieces on a chess board
 pub const number_of_pieces = 12;
+
+// Mate score; MATE_VALUE + max ply must fit the i16 TT score field
+pub const MATE_VALUE: i32 = 32000;
+// Scores beyond +-MATE_BOUND are mates
+pub const MATE_BOUND: i32 = MATE_VALUE - 100;
 
 // Little endian rank-file (LERF) mapping
 pub const square = enum {
@@ -33,17 +38,6 @@ pub const square = enum {
     pub inline fn toU6(self: square) u6 {
         return @as(u6, @truncate(@intFromEnum(self)));
     }
-};
-
-pub const square_number = [_]usize{
-    0,  1,  2,  3,  4,  5,  6,  7,
-    8,  9,  10, 11, 12, 13, 14, 15,
-    16, 17, 18, 19, 20, 21, 22, 23,
-    24, 25, 26, 27, 28, 29, 30, 31,
-    32, 33, 34, 35, 36, 37, 38, 39,
-    40, 41, 42, 43, 44, 45, 46, 47,
-    48, 49, 50, 51, 52, 53, 54, 55,
-    56, 57, 58, 59, 60, 61, 62, 63,
 };
 
 pub const SquareString = struct {
@@ -74,6 +68,23 @@ pub const tricky_position: []const u8 = "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1
 pub const killer_position: []const u8 = "rnbqkb1r/pp1p1pPp/8/2p1pP2/1P1P4/3P3P/P1P1P3/RNBQKBNR w KQkq e6 0 1";
 pub const cmk_position: []const u8 = "r2q1rk1/ppp2ppp/2n1bn2/2b1p3/3pP3/3P1NPP/PPP1NPB1/R1BQ1RK1 b - - 0 9 ";
 
+// Six standard Chess Programming Wiki PERFT positions
+pub const standard_perft_positions = [6][]const u8{
+    "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+    "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+    "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1",
+    "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1",
+    "rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8",
+    "r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 10",
+};
+pub const standard_perft_names = [6][]const u8{
+    "Zacetna",     "Kiwipete",    "Topovska konc.",
+    "Zrcalna sr.", "Promocijska", "Tihi turnir",
+};
+
+/// UCI spin option backed by an i32; uci.zig collects every module's `options`.
+pub const Option = struct { name: []const u8, ptr: *i32, min: i32, max: i32 };
+
 pub const PieceString = "PNBRQK~>pnbrqk.";
 
 pub const Color = enum {
@@ -82,7 +93,15 @@ pub const Color = enum {
     both,
 
     pub inline fn toU4(self: Color) u4 {
-        return @intCast(@intFromEnum(self)); 
+        return @intCast(@intFromEnum(self));
+    }
+
+    pub inline fn other(self: Color) Color {
+        return switch (self) {
+            .White => .Black,
+            .Black => .White,
+            .both => .both,
+        };
     }
 };
 
@@ -95,7 +114,7 @@ pub const PieceType = enum(u8) {
     King,
 
     pub inline fn toU3(self: PieceType) u3 {
-        return @intFromEnum(self);
+        return @intCast(@intFromEnum(self));
     }
 };
 
@@ -117,9 +136,18 @@ pub const Piece = enum(u8) {
     pub inline fn toU4(self: Piece) u4 {
         return @as(u4, @intFromEnum(self));
     }
+
+    /// White 0-5, black 8-13: low 3 bits are the type, bit 3 the color. Not valid for NO_PIECE.
+    pub inline fn piece_type(self: Piece) PieceType {
+        return @enumFromInt(@intFromEnum(self) & 7);
+    }
+
+    pub inline fn color(self: Piece) Color {
+        return if (@intFromEnum(self) < 8) .White else .Black;
+    }
 };
 
-pub const unicodePice = &[_][]const u8{
+pub const unicode_piece = &[_][]const u8{
     // zig fmt: off
     "♟︎", "♞", "♝", "♜", "♛", "♚", "~", ">",
     "♙", "♘", "♗", "♖", "♕", "♔", ".",
@@ -132,7 +160,6 @@ pub const MoveFlags = enum(u4) {
     OO = 0b0010, // 2 can castle to the king side
     OOO = 0b0011, // 3 can castle to the queen side
     CAPTURE = 0b1000, // 8
-    CAPTURES = 0b1011, // 11
     EN_PASSANT = 0b1010, // 10
 
     // Promotions (no capture)
@@ -153,46 +180,20 @@ pub const Castle = enum(u8) {
     BQ = 8,
 };
 
-pub const casteling_rights: Bitboard = 0x9100000000000091;
+// FEN castling letters and their rights bits, in FEN order.
+pub const CastleString = "KQkq";
+pub const castle_bits = [4]u8{ @intFromEnum(Castle.WK), @intFromEnum(Castle.WQ), @intFromEnum(Castle.BK), @intFromEnum(Castle.BQ) };
 
-pub const white_castelingOO: Bitboard = 0x90;
-pub const white_castelingOOO: Bitboard = 0x90;
-pub const black_castelingOO: Bitboard = 0x9000000000000000;
-pub const black_castelingOOO: Bitboard = 0x1100000000000000;
-
-
-pub const white_casteling_betweenOO: Bitboard = 0x60;
-pub const white_casteling_betweenOOO: Bitboard = 0xe;
-pub const black_casteling_betweenOO: Bitboard = 0x6000000000000000;
-pub const black_casteling_betweenOOO: Bitboard = 0xe00000000000000;
-
-pub const BoardState = struct {
-    pieces: [Board.PieceCount]Bitboard,
-    board: [64]Piece,
-    side: Color,
-    enpassant: square,
-    castle: u8,
-    hash: u64,
-
-    pub fn save(board: *const Board) BoardState {
-        return BoardState{
-            .pieces = board.pieces,
-            .board = board.board,
-            .side = board.side,
-            .enpassant = board.enpassant,
-            .castle = board.castle,
-            .hash = board.hash,
-        };
-    }
-
-    pub fn restore(self: BoardState, board: *Board) void {
-        board.pieces = self.pieces;
-        board.board = self.board;
-        board.side = self.side;
-        board.enpassant = self.enpassant;
-        board.castle = self.castle;
-        board.hash = self.hash;
-    }
+/// Castling rights mask table: board.castle &= castle_mask[from] & castle_mask[to]
+pub const castle_mask: [64]u8 = blk: {
+    var m: [64]u8 = .{0xFF} ** 64;
+    m[@intFromEnum(square.a1)] = ~@as(u8, @intFromEnum(Castle.WQ)); // 0xFD
+    m[@intFromEnum(square.e1)] = ~@as(u8, @intFromEnum(Castle.WK) | @intFromEnum(Castle.WQ)); // 0xFC
+    m[@intFromEnum(square.h1)] = ~@as(u8, @intFromEnum(Castle.WK)); // 0xFE
+    m[@intFromEnum(square.a8)] = ~@as(u8, @intFromEnum(Castle.BQ)); // 0xF7
+    m[@intFromEnum(square.e8)] = ~@as(u8, @intFromEnum(Castle.BK) | @intFromEnum(Castle.BQ)); // 0xF3
+    m[@intFromEnum(square.h8)] = ~@as(u8, @intFromEnum(Castle.BK)); // 0xFB
+    break :blk m;
 };
 
 pub const Board = struct {
@@ -202,32 +203,13 @@ pub const Board = struct {
     enpassant: square,
     castle: u8, // bitmask of Castle
     hash: u64 = 0, // Zobrist hash
-
+    halfmove: u16 = 0, // Half-move clock for 50-move rule
 
     pub const PieceCount = @intFromEnum(Piece.NO_PIECE) + 1;
 
-    pub fn white_pieces(self: *const Board) Bitboard {
-        return self.pieces[Piece.WHITE_PAWN.toU4()] | 
-               self.pieces[Piece.WHITE_KNIGHT.toU4()] | 
-               self.pieces[Piece.WHITE_BISHOP.toU4()] | 
-               self.pieces[Piece.WHITE_ROOK.toU4()] | 
-               self.pieces[Piece.WHITE_QUEEN.toU4()] | 
-               self.pieces[Piece.WHITE_KING.toU4()];
-    }
-    
-    pub fn black_pieces(self: *const Board) Bitboard {
-        return self.pieces[Piece.BLACK_PAWN.toU4()] | 
-               self.pieces[Piece.BLACK_KNIGHT.toU4()] | 
-               self.pieces[Piece.BLACK_BISHOP.toU4()] | 
-               self.pieces[Piece.BLACK_ROOK.toU4()] | 
-               self.pieces[Piece.BLACK_QUEEN.toU4()] | 
-               self.pieces[Piece.BLACK_KING.toU4()];
-    }
-
-    pub fn pieces_combined(self: *const Board) Bitboard {
-        var bb: Bitboard = 0;
-        for (self.pieces) |p| bb |= p;
-        return bb;
+    /// Occupancy of the whole board.
+    pub inline fn pieces_combined(self: *const Board) Bitboard {
+        return self.set_pieces(.White) | self.set_pieces(.Black);
     }
 
     pub fn new() Board {
@@ -241,115 +223,64 @@ pub const Board = struct {
         b.enpassant = square.NO_SQUARE;
         b.castle = 0;
         b.hash = 0;
+        b.halfmove = 0;
         return b;
     }
 
     pub inline fn set_pieces(self: *const Board, comptime c: Color) Bitboard {
-        return if (c == Color.White) 
-            self.pieces[Piece.WHITE_PAWN.toU4()] | 
-            self.pieces[Piece.WHITE_KNIGHT.toU4()] | 
-            self.pieces[Piece.WHITE_BISHOP.toU4()] | 
-            self.pieces[Piece.WHITE_ROOK.toU4()] | 
-            self.pieces[Piece.WHITE_QUEEN.toU4()] | 
-            self.pieces[Piece.WHITE_KING.toU4()] 
-        else 
-            self.pieces[Piece.BLACK_PAWN.toU4()] | 
-            self.pieces[Piece.BLACK_KNIGHT.toU4()] | 
-            self.pieces[Piece.BLACK_BISHOP.toU4()] | 
-            self.pieces[Piece.BLACK_ROOK.toU4()] | 
-            self.pieces[Piece.BLACK_QUEEN.toU4()] | 
-            self.pieces[Piece.BLACK_KING.toU4()];
+        @setEvalBranchQuota(10000);
+        return if (c == Color.White)
+            self.pieces[Piece.WHITE_PAWN.toU4()] |
+                self.pieces[Piece.WHITE_KNIGHT.toU4()] |
+                self.pieces[Piece.WHITE_BISHOP.toU4()] |
+                self.pieces[Piece.WHITE_ROOK.toU4()] |
+                self.pieces[Piece.WHITE_QUEEN.toU4()] |
+                self.pieces[Piece.WHITE_KING.toU4()]
+        else
+            self.pieces[Piece.BLACK_PAWN.toU4()] |
+                self.pieces[Piece.BLACK_KNIGHT.toU4()] |
+                self.pieces[Piece.BLACK_BISHOP.toU4()] |
+                self.pieces[Piece.BLACK_ROOK.toU4()] |
+                self.pieces[Piece.BLACK_QUEEN.toU4()] |
+                self.pieces[Piece.BLACK_KING.toU4()];
     }
 
-    pub inline fn set_white(self: *const Board) Bitboard {
-        return self.pieces[Piece.WHITE_PAWN.toU4()] | 
-               self.pieces[Piece.WHITE_KNIGHT.toU4()] | 
-               self.pieces[Piece.WHITE_BISHOP.toU4()] | 
-               self.pieces[Piece.WHITE_ROOK.toU4()] | 
-               self.pieces[Piece.WHITE_QUEEN.toU4()] | 
-               self.pieces[Piece.WHITE_KING.toU4()];
+    // True if `c` has a knight, bishop, rook or queen (null-move zugzwang guard)
+    pub inline fn has_non_pawn(self: *const Board, comptime c: Color) bool {
+        const p = &self.pieces;
+        return if (c == Color.White)
+            (p[Piece.WHITE_KNIGHT.toU4()] | p[Piece.WHITE_BISHOP.toU4()] | p[Piece.WHITE_ROOK.toU4()] | p[Piece.WHITE_QUEEN.toU4()]) != 0
+        else
+            (p[Piece.BLACK_KNIGHT.toU4()] | p[Piece.BLACK_BISHOP.toU4()] | p[Piece.BLACK_ROOK.toU4()] | p[Piece.BLACK_QUEEN.toU4()]) != 0;
     }
 
-    pub inline fn set_black(self: *const Board) Bitboard {
-        return self.pieces[Piece.BLACK_PAWN.toU4()] | 
-               self.pieces[Piece.BLACK_KNIGHT.toU4()] | 
-               self.pieces[Piece.BLACK_BISHOP.toU4()] | 
-               self.pieces[Piece.BLACK_ROOK.toU4()] | 
-               self.pieces[Piece.BLACK_QUEEN.toU4()] | 
-               self.pieces[Piece.BLACK_KING.toU4()];
-    }
-
-    pub fn save_state(self: *const Board) BoardState {
-        return BoardState.save(self);
-    }
-
-    pub fn restore_state(self: *Board, state: BoardState) void {
-        state.restore(self);
-    }
-
-    // Get piece type at square
+    // Piece type at a square, from the mailbox
     pub inline fn get_piece_type_at(self: *const Board, sq: u6) ?PieceType {
-        const bb_mask = @as(u64, 1) << sq;
-     
-        if (self.pieces[@intFromEnum(Piece.WHITE_PAWN)] & bb_mask != 0) return PieceType.Pawn;
-        if (self.pieces[@intFromEnum(Piece.WHITE_KNIGHT)] & bb_mask != 0) return PieceType.Knight;
-        if (self.pieces[@intFromEnum(Piece.WHITE_BISHOP)] & bb_mask != 0) return PieceType.Bishop;
-        if (self.pieces[@intFromEnum(Piece.WHITE_ROOK)] & bb_mask != 0) return PieceType.Rook;
-        if (self.pieces[@intFromEnum(Piece.WHITE_QUEEN)] & bb_mask != 0) return PieceType.Queen;
-        if (self.pieces[@intFromEnum(Piece.WHITE_KING)] & bb_mask != 0) return PieceType.King;
-        
-        if (self.pieces[@intFromEnum(Piece.BLACK_PAWN)] & bb_mask != 0) return PieceType.Pawn;
-        if (self.pieces[@intFromEnum(Piece.BLACK_KNIGHT)] & bb_mask != 0) return PieceType.Knight;
-        if (self.pieces[@intFromEnum(Piece.BLACK_BISHOP)] & bb_mask != 0) return PieceType.Bishop;
-        if (self.pieces[@intFromEnum(Piece.BLACK_ROOK)] & bb_mask != 0) return PieceType.Rook;
-        if (self.pieces[@intFromEnum(Piece.BLACK_QUEEN)] & bb_mask != 0) return PieceType.Queen;
-        if (self.pieces[@intFromEnum(Piece.BLACK_KING)] & bb_mask != 0) return PieceType.King;
-        
-        return null;
+        const piece = self.board[sq];
+        if (piece == Piece.NO_PIECE) return null;
+        return piece.piece_type();
     }
 
-
-    // Get piece at at square
-   pub inline fn get_piece_at(self: *const Board, sq: u6) Piece {
-    inline for (0..6) |i| {
-        if ((self.pieces[i] & (@as(u64, 1) << sq)) != 0) {
-            return @enumFromInt(i);
-        }
-    } 
-    inline for (8..14) |i| {
-        if ((self.pieces[i] & (@as(u64, 1) << sq)) != 0) {
-            return @enumFromInt(i);
-        }
+    // Piece color at a square, from the mailbox
+    pub inline fn get_piece_color_at(self: *const Board, sq: u6) ?Color {
+        const piece = self.board[sq];
+        if (piece == Piece.NO_PIECE) return null;
+        return piece.color();
     }
-    
-    return Piece.NO_PIECE;
+};
+
+/// Square-index helpers
+pub inline fn file_of(sq: anytype) @TypeOf(sq) {
+    return sq % 8;
+}
+pub inline fn rank_of(sq: anytype) @TypeOf(sq) {
+    return sq / 8;
+}
+pub inline fn flip_rank(sq: anytype) @TypeOf(sq) {
+    return sq ^ 56;
 }
 
-    // Get piece color at square
-    pub inline fn get_piece_color_at(self: *const Board, sq: u6) ?Color {
-        const piece = self.get_piece_at(sq);
-        if (piece == Piece.NO_PIECE) return null;
-        return if (@intFromEnum(piece) < 6) Color.White else Color.Black;
-    }
-};
-
-// Attacking directions for the pieces
-pub const Direction = enum(i32) {
-    North = 8,
-    NorthEast = 9,
-    East = 1,
-    SouthEast = 7,
-    South = 8,
-    SouthWest = 9,
-    West = 1,
-    NorthWest = 7,
-
-    // Double Push
-    NorthNorth = 16,
-    SouthSouth = 16,
-};
-
-// prevent bits from wrapping around the bord example form a1 to h2
+// prevent bits from wrapping around the board
 pub const MaskFile = enum(u64) {
     AFILE = 0x0101010101010101, // file A: a1, a2, ... a8
     BFILE = 0x0202020202020202, // file B: b1, b2, ... b8
@@ -441,9 +372,9 @@ pub const MaskAntiDiagonalNESW = enum(u64) {
     ANTIDIAG6 = 0x0000010204081020,
     ANTIDIAG7 = 0x0001020408102040,
     ANTIDIAG8 = 0x0102040810204080,
-    ANTIDIAG9 = 0x2040810204080000,
-    ANTIDIAG10 = 0x4081020408000000,
-    ANTIDIAG11 = 0x8102040800000000,
+    ANTIDIAG9 = 0x0204081020408000,
+    ANTIDIAG10 = 0x0408102040800000,
+    ANTIDIAG11 = 0x0810204080000000,
     ANTIDIAG12 = 0x1020408000000000,
     ANTIDIAG13 = 0x2040800000000000,
     ANTIDIAG14 = 0x4080000000000000,
@@ -468,8 +399,8 @@ pub const mask_anti_diagonal_ne_sw: [15]u64 = .{
     @intFromEnum(MaskAntiDiagonalNESW.ANTIDIAG15),
 };
 
-//Precomputed square masks
-pub const squar_bb = [_]u64{
+// Square masks
+pub const square_bb = [_]u64{
     0x1,                0x2,                0x4,                0x8,
     0x10,               0x20,               0x40,               0x80,
     0x100,              0x200,              0x400,              0x800,
@@ -487,35 +418,4 @@ pub const squar_bb = [_]u64{
     0x100000000000000,  0x200000000000000,  0x400000000000000,  0x800000000000000,
     0x1000000000000000, 0x2000000000000000, 0x4000000000000000, 0x8000000000000000,
     0x0,
-};
-
-pub const squar_bb_rotated = [_]u64{
-    // zig fmt: off
-    // rank 8
-    0x0100000000000000, 0x0200000000000000, 0x0400000000000000, 0x0800000000000000,
-    0x1000000000000000, 0x2000000000000000, 0x4000000000000000, 0x8000000000000000,
-    // rank 7
-    0x0001000000000000, 0x0002000000000000, 0x0004000000000000, 0x0008000000000000,
-    0x0010000000000000, 0x0020000000000000, 0x0040000000000000, 0x0080000000000000,
-    // rank 6
-    0x0000010000000000, 0x0000020000000000, 0x0000040000000000, 0x0000080000000000,
-    0x0000100000000000, 0x0000200000000000, 0x0000400000000000, 0x0000800000000000,
-    // rank 5
-    0x0000000100000000, 0x0000000200000000, 0x0000000400000000, 0x0000000800000000,
-    0x0000001000000000, 0x0000002000000000, 0x0000004000000000, 0x0000008000000000,
-    // rank 4
-    0x0000000001000000, 0x0000000002000000, 0x0000000004000000, 0x0000000008000000,
-    0x0000000010000000, 0x0000000020000000, 0x0000000040000000, 0x0000000080000000,
-    // rank 3
-    0x0000000000010000, 0x0000000000020000, 0x0000000000040000, 0x0000000000080000,
-    0x0000000000100000, 0x0000000000200000, 0x0000000000400000, 0x0000000000800000,
-    // rank 2
-    0x0000000000000100, 0x0000000000000200, 0x0000000000000400, 0x0000000000000800,
-    0x0000000000001000, 0x0000000000002000, 0x0000000000004000, 0x0000000000008000,
-    // rank 1
-    0x0000000000000001, 0x0000000000000002, 0x0000000000000004, 0x0000000000000008,
-    0x0000000000000010, 0x0000000000000020, 0x0000000000000040, 0x0000000000000080,
-    // none
-    0x0,
-    // zig fmt: on
 };
