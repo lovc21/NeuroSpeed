@@ -39,7 +39,7 @@ jobs:
               continue
             fi
             COUNTER=$((COUNTER + 1))
-            actual=$(printf "position fen %s\nperft %s\nquit\n" "$fen" "${{ matrix.suites.depth }}" | ./zig-out/bin/NeuroSpeed 2>&1 | awk '/^Nodes:/{print $NF}' | head -1)
+            actual=$(printf "position fen %s\nperft %s\nquit\n" "$fen" "${{ matrix.suites.depth }}" | ./zig-out/bin/NeuroSpeed 2>&1 | awk '/ nodes,/{print $1}' | head -1)
             if [ "$actual" != "$expected" ]; then
               echo "FAIL $COUNTER: $fen -> Expected: $expected, Got: $actual"
               FAILED=$((FAILED + 1))
