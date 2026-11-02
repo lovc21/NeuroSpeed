@@ -5,7 +5,7 @@ const nnue = @import("nnue.zig");
 const clock = @import("clock.zig");
 
 comptime {
-    _ = @import("memops.zig");
+    _ = @import("memops");
 }
 
 pub fn main(init: std.process.Init) !void {

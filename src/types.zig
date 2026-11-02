@@ -12,6 +12,11 @@ pub const number_of_squares = 64;
 // the number of pieces on a chess board
 pub const number_of_pieces = 12;
 
+// Mate score; MATE_VALUE + max ply must fit the i16 TT score field
+pub const MATE_VALUE: i32 = 32000;
+// Scores beyond +-MATE_BOUND are mates
+pub const MATE_BOUND: i32 = MATE_VALUE - 100;
+
 // Little endian rank-file (LERF) mapping
 pub const square = enum {
     // zig fmt: off
@@ -63,10 +68,7 @@ pub const tricky_position: []const u8 = "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1
 pub const killer_position: []const u8 = "rnbqkb1r/pp1p1pPp/8/2p1pP2/1P1P4/3P3P/P1P1P3/RNBQKBNR w KQkq e6 0 1";
 pub const cmk_position: []const u8 = "r2q1rk1/ppp2ppp/2n1bn2/2b1p3/3pP3/3P1NPP/PPP1NPB1/R1BQ1RK1 b - - 0 9 ";
 
-// Six standard Chess Programming Wiki PERFT positions used for component speed
-// benchmarks (move generator, evaluation, search). Matches table tab:perft_positions
-// in the thesis. Order: start, Kiwipete, rook endgame, mirrored middlegame,
-// promotion, quiet tournament position.
+// Six standard Chess Programming Wiki PERFT positions
 pub const standard_perft_positions = [6][]const u8{
     "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
     "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
@@ -80,6 +82,9 @@ pub const standard_perft_names = [6][]const u8{
     "Zrcalna sr.", "Promocijska", "Tihi turnir",
 };
 
+/// UCI spin option backed by an i32; uci.zig collects every module's `options`.
+pub const Option = struct { name: []const u8, ptr: *i32, min: i32, max: i32 };
+
 pub const PieceString = "PNBRQK~>pnbrqk.";
 
 pub const Color = enum {
@@ -89,6 +94,14 @@ pub const Color = enum {
 
     pub inline fn toU4(self: Color) u4 {
         return @intCast(@intFromEnum(self));
+    }
+
+    pub inline fn other(self: Color) Color {
+        return switch (self) {
+            .White => .Black,
+            .Black => .White,
+            .both => .both,
+        };
     }
 };
 
@@ -101,7 +114,7 @@ pub const PieceType = enum(u8) {
     King,
 
     pub inline fn toU3(self: PieceType) u3 {
-        return @intFromEnum(self);
+        return @intCast(@intFromEnum(self));
     }
 };
 
@@ -122,6 +135,15 @@ pub const Piece = enum(u8) {
 
     pub inline fn toU4(self: Piece) u4 {
         return @as(u4, @intFromEnum(self));
+    }
+
+    /// White 0-5, black 8-13: low 3 bits are the type, bit 3 the color. Not valid for NO_PIECE.
+    pub inline fn piece_type(self: Piece) PieceType {
+        return @enumFromInt(@intFromEnum(self) & 7);
+    }
+
+    pub inline fn color(self: Piece) Color {
+        return if (@intFromEnum(self) < 8) .White else .Black;
     }
 };
 
@@ -158,9 +180,11 @@ pub const Castle = enum(u8) {
     BQ = 8,
 };
 
+// FEN castling letters and their rights bits, in FEN order.
+pub const CastleString = "KQkq";
+pub const castle_bits = [4]u8{ @intFromEnum(Castle.WK), @intFromEnum(Castle.WQ), @intFromEnum(Castle.BK), @intFromEnum(Castle.BQ) };
+
 /// Castling rights mask table: board.castle &= castle_mask[from] & castle_mask[to]
-/// Removes the appropriate castling rights when a piece moves from/to a corner or king square.
-/// All other squares keep all rights (0xFF).
 pub const castle_mask: [64]u8 = blk: {
     var m: [64]u8 = .{0xFF} ** 64;
     m[@intFromEnum(square.a1)] = ~@as(u8, @intFromEnum(Castle.WQ)); // 0xFD
@@ -183,10 +207,9 @@ pub const Board = struct {
 
     pub const PieceCount = @intFromEnum(Piece.NO_PIECE) + 1;
 
-    pub fn pieces_combined(self: *const Board) Bitboard {
-        var bb: Bitboard = 0;
-        for (self.pieces) |p| bb |= p;
-        return bb;
+    /// Occupancy of the whole board.
+    pub inline fn pieces_combined(self: *const Board) Bitboard {
+        return self.set_pieces(.White) | self.set_pieces(.Black);
     }
 
     pub fn new() Board {
@@ -222,37 +245,40 @@ pub const Board = struct {
                 self.pieces[Piece.BLACK_KING.toU4()];
     }
 
-    // Get piece type at square — O(1) via the maintained mailbox
-    // (WHITE_* = 0..5, BLACK_* = 8..13, so `& 7` is the piece type).
+    // True if `c` has a knight, bishop, rook or queen (null-move zugzwang guard)
+    pub inline fn has_non_pawn(self: *const Board, comptime c: Color) bool {
+        const p = &self.pieces;
+        return if (c == Color.White)
+            (p[Piece.WHITE_KNIGHT.toU4()] | p[Piece.WHITE_BISHOP.toU4()] | p[Piece.WHITE_ROOK.toU4()] | p[Piece.WHITE_QUEEN.toU4()]) != 0
+        else
+            (p[Piece.BLACK_KNIGHT.toU4()] | p[Piece.BLACK_BISHOP.toU4()] | p[Piece.BLACK_ROOK.toU4()] | p[Piece.BLACK_QUEEN.toU4()]) != 0;
+    }
+
+    // Piece type at a square, from the mailbox
     pub inline fn get_piece_type_at(self: *const Board, sq: u6) ?PieceType {
         const piece = self.board[sq];
         if (piece == Piece.NO_PIECE) return null;
-        return @enumFromInt(@intFromEnum(piece) & 7);
+        return piece.piece_type();
     }
 
-    // Get piece at at square
-    pub inline fn get_piece_at(self: *const Board, sq: u6) Piece {
-        inline for (0..6) |i| {
-            if ((self.pieces[i] & (@as(u64, 1) << sq)) != 0) {
-                return @enumFromInt(i);
-            }
-        }
-        inline for (8..14) |i| {
-            if ((self.pieces[i] & (@as(u64, 1) << sq)) != 0) {
-                return @enumFromInt(i);
-            }
-        }
-
-        return Piece.NO_PIECE;
-    }
-
-    // Get piece color at square — O(1) via the maintained mailbox
+    // Piece color at a square, from the mailbox
     pub inline fn get_piece_color_at(self: *const Board, sq: u6) ?Color {
         const piece = self.board[sq];
         if (piece == Piece.NO_PIECE) return null;
-        return if (@intFromEnum(piece) < 6) Color.White else Color.Black;
+        return piece.color();
     }
 };
+
+/// Square-index helpers
+pub inline fn file_of(sq: anytype) @TypeOf(sq) {
+    return sq % 8;
+}
+pub inline fn rank_of(sq: anytype) @TypeOf(sq) {
+    return sq / 8;
+}
+pub inline fn flip_rank(sq: anytype) @TypeOf(sq) {
+    return sq ^ 56;
+}
 
 // prevent bits from wrapping around the board
 pub const MaskFile = enum(u64) {
@@ -373,7 +399,7 @@ pub const mask_anti_diagonal_ne_sw: [15]u64 = .{
     @intFromEnum(MaskAntiDiagonalNESW.ANTIDIAG15),
 };
 
-//Precomputed square masks
+// Square masks
 pub const square_bb = [_]u64{
     0x1,                0x2,                0x4,                0x8,
     0x10,               0x20,               0x40,               0x80,

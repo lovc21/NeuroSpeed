@@ -1,20 +1,61 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const types = @import("types.zig");
 const move_gen = @import("move.zig");
 const Move = move_gen.Move;
 
+// Mate scores are stored relative to the position, not the root
+pub inline fn score_to_tt(score: i32, ply: u16) i32 {
+    if (score > types.MATE_BOUND) return score + @as(i32, ply);
+    if (score < -types.MATE_BOUND) return score - @as(i32, ply);
+    return score;
+}
+
+pub inline fn score_from_tt(score: i16, ply: u16) i32 {
+    const s: i32 = score;
+    if (s > types.MATE_BOUND) return s - @as(i32, ply);
+    if (s < -types.MATE_BOUND) return s + @as(i32, ply);
+    return s;
+}
+
+// True if a stored bound already decides the (alpha, beta) window
+pub inline fn cutoff(flag: TTFlag, score: i32, alpha: i32, beta: i32) bool {
+    return switch (flag) {
+        .EXACT => true,
+        .LOWER => score >= beta,
+        .UPPER => score <= alpha,
+        .NONE => false,
+    };
+}
+
+// The engine's transposition table (null if allocation failed)
+pub var global: ?TT = null;
+
+// (Re)allocate the global table
+pub fn init_global(allocator: std.mem.Allocator, size_mb: usize) !void {
+    deinit_global();
+    global = try TT.init(allocator, size_mb);
+}
+
+pub fn deinit_global() void {
+    if (global) |*t| {
+        t.deinit();
+        global = null;
+    }
+}
+
 // Transposition Table entry flags
 pub const TTFlag = enum(u2) {
     NONE = 0,
-    EXACT = 1, // PV node — score is exact
-    LOWER = 2, // Fail-high — score is a lower bound (beta cutoff)
-    UPPER = 3, // Fail-low — score is an upper bound
+    EXACT = 1, // PV node
+    LOWER = 2, // Fail-high
+    UPPER = 3, // Fail-low
 };
 
-/// Sentinel for "no static eval stored" (in-check nodes).
+/// Sentinel for "no static eval stored"
 pub const NO_EVAL: i16 = std.math.minInt(i16);
 
-// TT Entry: 16 bytes (4 entries per cache line)
+// TT Entry: 16 bytes, 4 per 64-byte cluster
 pub const TTEntry = struct {
     key: u32 = 0,
     best_move: Move = Move.empty(),
@@ -23,44 +64,54 @@ pub const TTEntry = struct {
     depth: u8 = 0,
     flag: TTFlag = .NONE,
     age: u8 = 0,
+    // ttPv: position was searched with an open window at some point
+    pv: bool = false,
 
     pub inline fn is_empty(self: *const TTEntry) bool {
         return self.flag == .NONE;
     }
 };
 
+pub const CLUSTER_SIZE = 4;
+pub const Cluster = [CLUSTER_SIZE]TTEntry;
+const CLUSTER_BYTES = @sizeOf(Cluster);
+const EMPTY_CLUSTER: Cluster = .{TTEntry{}} ** CLUSTER_SIZE;
+
+// 2 MB alignment so the kernel can back the table with transparent huge pages
+const HUGE_PAGE: usize = 2 * 1024 * 1024;
+const HUGE_ALIGN = std.mem.Alignment.fromByteUnits(HUGE_PAGE);
+
 pub const TT = struct {
-    entries: []TTEntry,
-    mask: usize,
+    clusters: []align(HUGE_PAGE) Cluster,
     age: u8 = 0,
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, size_mb: usize) !TT {
-        const entry_size = @sizeOf(TTEntry);
-        const num_entries_raw = (size_mb * 1024 * 1024) / entry_size;
+        const num_clusters = @max(1, (size_mb * 1024 * 1024) / CLUSTER_BYTES);
 
-        var num_entries: usize = 1;
-        while (num_entries * 2 <= num_entries_raw) {
-            num_entries *= 2;
-        }
-
-        const entries = try allocator.alloc(TTEntry, num_entries);
-        @memset(entries, TTEntry{});
+        const clusters = try allocator.alignedAlloc(Cluster, HUGE_ALIGN, num_clusters);
+        advise_huge_pages(clusters);
+        @memset(clusters, EMPTY_CLUSTER);
 
         return TT{
-            .entries = entries,
-            .mask = num_entries - 1,
+            .clusters = clusters,
             .age = 0,
             .allocator = allocator,
         };
     }
 
+    fn advise_huge_pages(clusters: []align(HUGE_PAGE) Cluster) void {
+        if (builtin.os.tag != .linux) return;
+        const bytes = std.mem.sliceAsBytes(clusters);
+        std.posix.madvise(@alignCast(bytes.ptr), bytes.len, std.os.linux.MADV.HUGEPAGE) catch {};
+    }
+
     pub fn deinit(self: *TT) void {
-        self.allocator.free(self.entries);
+        self.allocator.free(self.clusters);
     }
 
     pub fn clear(self: *TT) void {
-        @memset(self.entries, TTEntry{});
+        @memset(self.clusters, EMPTY_CLUSTER);
         self.age = 0;
     }
 
@@ -68,26 +119,27 @@ pub const TT = struct {
         self.age +%= 1;
     }
 
+    // Cluster index = floor(hash * n / 2^64): uniform over any n, one MUL; uses the HIGH hash bits
     inline fn index(self: *const TT, hash: u64) usize {
-        return @as(usize, @truncate(hash)) & self.mask;
+        const wide = @as(u128, hash) * @as(u128, self.clusters.len);
+        return @intCast(wide >> 64);
     }
 
+    // LOW hash bits: independent of the index bits above
     inline fn verification_key(hash: u64) u32 {
-        return @truncate(hash >> 32);
+        return @truncate(hash);
     }
 
-    /// Prefetch the entry for `hash` (issued right after make_move so the
-    /// line is in-cache by the time the child node probes). Semantically a
-    /// no-op — bit-identical search.
+    // Prefetch the cluster for `hash` right after make_move; semantically a no-op
     pub inline fn prefetch(self: *const TT, hash: u64) void {
-        @prefetch(&self.entries[self.index(hash)], .{});
+        @prefetch(&self.clusters[self.index(hash)], .{});
     }
 
     pub fn probe(self: *const TT, hash: u64) ?*const TTEntry {
-        const idx = self.index(hash);
-        const entry = &self.entries[idx];
-        if (entry.flag != .NONE and entry.key == verification_key(hash)) {
-            return entry;
+        const cluster = &self.clusters[self.index(hash)];
+        const vkey = verification_key(hash);
+        for (cluster) |*entry| {
+            if (entry.flag != .NONE and entry.key == vkey) return entry;
         }
         return null;
     }
@@ -100,65 +152,86 @@ pub const TT = struct {
         flag: TTFlag,
         best_move: Move,
         static_eval: i16,
+        pv: bool,
     ) void {
-        const idx = self.index(hash);
-        const entry = &self.entries[idx];
+        const cluster = &self.clusters[self.index(hash)];
         const vkey = verification_key(hash);
 
-        // Replacement policy (depth-preferred with aging). The old rule
-        // "age != current -> always replace" let depth-0 qsearch stores wipe
-        // the previous move's deep entries — in real games the TT carries
-        // over between moves and that carried depth is most of its value.
-        const same_key = entry.key == vkey and entry.flag != .NONE;
-        const age_dist: i32 = @intCast(self.age -% entry.age);
-        const replace = if (entry.flag == .NONE)
-            true
-        else if (same_key)
-            // Same position: refresh freely (newest bounds win) EXCEPT when a
-            // shallow store would wipe much deeper data — the qsearch depth-0
-            // spam case that motivated this policy.
-            @as(i32, depth) + 8 >= @as(i32, entry.depth)
-        else
-            // Collision: older entries get progressively easier to evict;
-            // same-age requires comparable depth.
-            @as(i32, depth) + 4 * @min(age_dist, 4) >= @as(i32, entry.depth);
+        // Slot selection: same position > empty slot > weakest occupant (shallowest after an age penalty)
+        var slot: *TTEntry = &cluster[0];
+        var same_key = false;
+        var found = false;
+        for (cluster) |*entry| {
+            if (entry.flag != .NONE and entry.key == vkey) {
+                slot = entry;
+                same_key = true;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            for (cluster) |*entry| {
+                if (entry.flag == .NONE) {
+                    slot = entry;
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if (!found) {
+            var best_value: i32 = std.math.maxInt(i32);
+            for (cluster) |*entry| {
+                // Victim score: depth minus an age penalty, so stale entries are cheapest to evict.
+                const age_dist: i32 = @intCast(self.age -% entry.age);
+                const v = @as(i32, entry.depth) - 8 * @min(age_dist, 4);
+                if (v < best_value) {
+                    best_value = v;
+                    slot = entry;
+                }
+            }
+        }
 
-        if (!replace) {
-            // Still-useful same-position entry: mark it current so collisions
-            // don't age it out while it keeps serving this search.
-            if (same_key) entry.age = self.age;
+        // Same position: refresh freely, except a shallow non-EXACT store must not wipe much deeper data (qsearch spam)
+        if (same_key and flag != .EXACT and @as(i32, depth) + 8 < @as(i32, slot.depth)) {
+            // Still-useful entry: keep it current and remember it was on the PV
+            slot.age = self.age;
+            slot.pv = slot.pv or pv;
             return;
         }
-        {
-            // Clamp score to i16 range
-            const clamped_score: i16 = if (score > std.math.maxInt(i16))
-                std.math.maxInt(i16)
-            else if (score < std.math.minInt(i16))
-                std.math.minInt(i16)
-            else
-                @intCast(score);
 
-            entry.* = TTEntry{
-                .key = vkey,
-                .depth = depth,
-                .score = clamped_score,
-                .static_eval = static_eval,
-                .flag = flag,
-                .best_move = best_move,
-                .age = self.age,
-            };
-        }
+        // Clamp score to i16 range
+        const clamped_score: i16 = if (score > std.math.maxInt(i16))
+            std.math.maxInt(i16)
+        else if (score < std.math.minInt(i16))
+            std.math.minInt(i16)
+        else
+            @intCast(score);
+
+        // A store without a best move (fail-low, qsearch) must not erase the move already known here
+        const move_to_keep = if (same_key and best_move.is_empty()) slot.best_move else best_move;
+
+        slot.* = TTEntry{
+            .key = vkey,
+            .depth = depth,
+            .score = clamped_score,
+            .static_eval = static_eval,
+            .flag = flag,
+            .best_move = move_to_keep,
+            .age = self.age,
+            .pv = pv,
+        };
     }
 
     // Get the approximate usage of the TT (per mille, 0-1000)
     pub fn hashfull(self: *const TT) u32 {
         var used: u32 = 0;
-        const sample = @min(self.entries.len, 1000);
-        for (0..sample) |i| {
-            if (self.entries[i].flag != .NONE and self.entries[i].age == self.age) {
-                used += 1;
+        // Explicit usize: @min with a literal narrows to u10, and sample * 4 would overflow it.
+        const sample: usize = @min(self.clusters.len, 1000);
+        for (self.clusters[0..sample]) |*cluster| {
+            for (cluster) |*entry| {
+                if (entry.flag != .NONE and entry.age == self.age) used += 1;
             }
         }
-        return used * 1000 / @as(u32, @intCast(sample));
+        return used * 1000 / @as(u32, @intCast(sample * CLUSTER_SIZE));
     }
 };

@@ -4,7 +4,6 @@ const attacks = @import("attacks.zig");
 const lists = @import("lists.zig");
 const util = @import("util.zig");
 const bitboard = @import("bitboard.zig");
-const eval = @import("evaluation.zig");
 const move_gen = @import("move.zig");
 const search = @import("search.zig");
 const print = std.debug.print;
@@ -12,7 +11,7 @@ const print = std.debug.print;
 // MVV_LVA table - victim_value[attacker_type]
 pub const MVV_LVA = [6][6]i32{
     // zig fmt: off
-    //  P    N    B    R    Q    K  
+    //  P    N    B    R    Q    K
     .{ 105, 104, 103, 102, 101, 100 }, // Pawn victim
     .{ 305, 304, 303, 302, 301, 300 }, // Knight victim
     .{ 305, 304, 303, 302, 301, 300 }, // Bishop victim
@@ -25,23 +24,12 @@ pub const MVV_LVA = [6][6]i32{
 // Piece values for SEE
 const PIECE_VALUES = [7]i32{ 100, 320, 330, 500, 900, 20000, 0 };
 
-// SEE least-valuable-attacker probe order per side ([0]=White, [1]=Black),
-// hoisted to comptime consts so see() doesn't materialize the array per
-// exchange iteration.
-const SEE_ATTACKER_ORDER = [2][5]types.Piece{
-    .{ .WHITE_KNIGHT, .WHITE_BISHOP, .WHITE_ROOK, .WHITE_QUEEN, .WHITE_KING },
-    .{ .BLACK_KNIGHT, .BLACK_BISHOP, .BLACK_ROOK, .BLACK_QUEEN, .BLACK_KING },
-};
-
 // Score constants
 const SCORE_PROMOTION_QUEEN_CAPTURE = 9000000;
 const SCORE_PROMOTION_CAPTURE = 8000000;
 const SCORE_GOOD_CAPTURE = 7000000;
 const SCORE_PROMOTION_QUEEN = 6000000;
 const SCORE_PROMOTION = 5000000;
-const SCORE_QUIET = 0;
-/// Captures classified SEE-losing at scoring time. Exported so the search can
-/// prune/skip them off the ordering score without re-running SEE.
 pub const SCORE_BAD_CAPTURE = -1000000;
 const SCORE_KILLER = 90000;
 const SCORE_KILLER_2 = 80000;
@@ -49,42 +37,36 @@ const SCORE_COUNTERMOVE = 50000;
 const MAX_LOOP_COUNT = 32;
 const SCORE_PV_MOVE = 10000000;
 
-//TODO this can be optimized with a scored move list
+const VL = lists.VL;
+const ScoreVec = @Vector(VL, i32);
+const LaneMask = std.meta.Int(.unsigned, VL);
+// Scores at or above this tie: the first such move in list order is picked (TT move or queen promo capture).
+const SCORE_FORCED: ScoreVec = @splat(SCORE_PROMOTION_QUEEN_CAPTURE);
+
+// Swap the best remaining move into slot i: vector max over the tail, then the first lane that hits it.
 pub inline fn get_next_best_move(move_list: *lists.MoveList, score_list: *lists.ScoreList, i: usize) move_gen.Move {
     const count = score_list.count;
-    if (i + 1 >= count) return move_list.moves[i];
+    const scores = &score_list.scores;
+    if (i + 1 >= count or scores[i] >= SCORE_PROMOTION_QUEEN_CAPTURE) return move_list.moves[i];
+
+    var vmax: ScoreVec = @splat(std.math.minInt(i32));
+    var j = i;
+    while (j < count) : (j += VL) vmax = @max(vmax, @min(@as(ScoreVec, scores[j..][0..VL].*), SCORE_FORCED));
+    const best: ScoreVec = @splat(@reduce(.Max, vmax));
 
     var best_j = i;
-    var max_score = score_list.scores[i];
-
-    if (max_score >= 9000000) {
-        return move_list.moves[i];
-    }
-
-    const start = i + 1;
-    const end = count;
-
-    for (start..end) |j| {
-        const score = score_list.scores[j];
-        if (score > max_score) {
-            best_j = j;
-            max_score = score;
-
-            if (score >= 9000000) break;
+    while (true) : (best_j += VL) {
+        const hit: LaneMask = @bitCast(@min(@as(ScoreVec, scores[best_j..][0..VL].*), SCORE_FORCED) == best);
+        if (hit != 0) {
+            best_j += @ctz(hit);
+            break;
         }
     }
 
     if (best_j != i) {
-        const temp_move = move_list.moves[i];
-        const temp_score = score_list.scores[i];
-
-        move_list.moves[i] = move_list.moves[best_j];
-        score_list.scores[i] = score_list.scores[best_j];
-
-        move_list.moves[best_j] = temp_move;
-        score_list.scores[best_j] = temp_score;
+        std.mem.swap(move_gen.Move, &move_list.moves[i], &move_list.moves[best_j]);
+        std.mem.swap(i32, &scores[i], &scores[best_j]);
     }
-
     return move_list.moves[i];
 }
 
@@ -95,22 +77,21 @@ pub inline fn score_move(board: *types.Board, move_list: *lists.MoveList, score_
         const move = move_list.moves[i];
         var score: i32 = 0;
 
-        if (!pv_move.is_empty() and moves_equal(move, pv_move)) {
-            // TT/PV move must stay ordered first — do NOT let the capture/promotion
-            // classification below overwrite its score.
+        if (!pv_move.is_empty() and move.eql(pv_move)) {
+            // Keep the TT/PV move first.
             score = SCORE_PV_MOVE;
-            // 1. Promotions with capture
+            // Promotions with capture
         } else if (move.is_promotion() and move.is_capture()) {
             if (move.flags == types.MoveFlags.PC_QUEEN) {
                 score = SCORE_PROMOTION_QUEEN_CAPTURE;
             } else {
                 score = SCORE_PROMOTION_CAPTURE + @as(i32, @intFromEnum(move.flags));
             }
-            // 2. En passant Captures
+            // En passant
         } else if (move.flags == types.MoveFlags.EN_PASSANT) {
             score = SCORE_GOOD_CAPTURE + 105;
 
-            // 2. Captures
+            // Captures
         } else if (move.is_capture()) {
             const victim_type: ?types.PieceType = types.Board.get_piece_type_at(board, move.to);
             const attacker_type: ?types.PieceType = types.Board.get_piece_type_at(board, move.from);
@@ -121,21 +102,18 @@ pub inline fn score_move(board: *types.Board, move_list: *lists.MoveList, score_
             }
 
             if (victim_type != null and attacker_type != null) {
-                // Single SEE classification at threshold 0: winning/even
-                // captures order above killers, losing captures below quiets
-                // (still MVV-ordered among themselves).
+                // SEE >= 0 captures go above killers, losing ones below quiets.
                 if (see(board, move, 0)) {
                     score = SCORE_GOOD_CAPTURE + MVV_LVA[@intFromEnum(victim_type.?)][@intFromEnum(attacker_type.?)];
                 } else {
                     score = SCORE_BAD_CAPTURE + MVV_LVA[@intFromEnum(victim_type.?)][@intFromEnum(attacker_type.?)];
                 }
-                // En passant capture
             } else {
                 print("ERROR: Unknown capture move type - victim: {?}, attacker: {?}, flags: {}\n", .{ victim_type, attacker_type, move.flags });
                 score = SCORE_BAD_CAPTURE;
             }
         }
-        // 3. Promotions without capture
+        // Quiet promotions
         else if (move.is_promotion()) {
             if (move.flags == types.MoveFlags.PR_QUEEN) {
                 score = SCORE_PROMOTION_QUEEN;
@@ -143,30 +121,28 @@ pub inline fn score_move(board: *types.Board, move_list: *lists.MoveList, score_
                 score = SCORE_PROMOTION - (4 - @as(i32, @intFromEnum(move.flags))) * 100000;
             }
         }
-        // 4. Castling
+        // Castling
         else if (move.flags == types.MoveFlags.OO or move.flags == types.MoveFlags.OOO) {
             // Better than quiet moves
             score = 100000;
         }
 
-        //5. Quiet moves gets a score of 0
+        // Quiet moves
         else {
-            // Ablation toggles (thesis component tests): dis_ordhist skips the
-            // killer + history terms, dis_counter the countermove term,
-            // dis_conthist the continuation-history terms. All 0 by default.
+            // dis_* are ablation switches, all 0 by default.
             // score first killer move
             if (search.params.dis_ordhist == 0 and
-                std.meta.eql(move_list.moves[i], search.global_search.killer_moves[0][search.global_search.ply]))
+                move_list.moves[i].eql(search.global_search.killer_moves[0][search.global_search.ply]))
             {
                 score = SCORE_KILLER;
                 // score second killer move
             } else if (search.params.dis_ordhist == 0 and
-                std.meta.eql(move_list.moves[i], search.global_search.killer_moves[1][search.global_search.ply]))
+                move_list.moves[i].eql(search.global_search.killer_moves[1][search.global_search.ply]))
             {
                 score = SCORE_KILLER_2;
                 // score countermove
             } else if (search.params.dis_counter == 0 and
-                !countermove.is_empty() and moves_equal(move, countermove))
+                !countermove.is_empty() and move.eql(countermove))
             {
                 score = SCORE_COUNTERMOVE;
                 // score history + continuation history
@@ -205,6 +181,8 @@ pub inline fn score_move(board: *types.Board, move_list: *lists.MoveList, score_
         }
         score_list.append(score);
     }
+    // One vector of -inf after the last score so the picker never needs a tail mask.
+    score_list.scores[score_list.count..][0..VL].* = @splat(std.math.minInt(i32));
 }
 
 pub fn see(board: *const types.Board, move: move_gen.Move, threshold: i32) bool {
@@ -265,7 +243,7 @@ pub fn see(board: *const types.Board, move: move_gen.Move, threshold: i32) bool 
         board.pieces[@intFromEnum(types.Piece.WHITE_QUEEN)] |
         board.pieces[@intFromEnum(types.Piece.BLACK_QUEEN)]);
 
-    var side = if (board.get_piece_color_at(from) == types.Color.White) types.Color.Black else types.Color.White;
+    var side: types.Color = if (board.get_piece_color_at(from)) |c| c.other() else .Black;
     var loop_count: u8 = 0;
 
     // Exchange sequence
@@ -281,41 +259,24 @@ pub fn see(board: *const types.Board, move: move_gen.Move, threshold: i32) bool 
             break;
         }
 
-        // Find the least valuable attacker
+        // Cheapest attacker: the first non-empty piece type in P N B R Q K order.
         var attacker_sq: u6 = 0;
-        var attacker_piece_val: i32 = PIECE_VALUES[5]; // Default to king value
+        var attacker_piece_val: i32 = PIECE_VALUES[5];
         var found = false;
-
-        // Check for pawns first (least valuable)
-        const pawn_piece = if (side == types.Color.White) types.Piece.WHITE_PAWN else types.Piece.BLACK_PAWN;
-        const pawn_attackers = my_attackers & board.pieces[@intFromEnum(pawn_piece)];
-        if (pawn_attackers != 0) {
-            attacker_sq = @intCast(util.lsb_index(pawn_attackers));
-            attacker_piece_val = PIECE_VALUES[0];
-            found = true;
-        }
-
-        if (!found) {
-            // Check other pieces in order of value
-            const piece_order = &SEE_ATTACKER_ORDER[@intFromEnum(side)];
-
-            for (piece_order, 1..) |piece, piece_idx| {
-                const piece_attackers = my_attackers & board.pieces[@intFromEnum(piece)];
-                if (piece_attackers != 0) {
-                    attacker_sq = @intCast(util.lsb_index(piece_attackers));
-                    attacker_piece_val = PIECE_VALUES[piece_idx];
-                    found = true;
-                    break;
-                }
+        const base: usize = @as(usize, side.toU4()) * 8;
+        for (0..6) |t| {
+            const piece_attackers = my_attackers & board.pieces[base + t];
+            if (piece_attackers != 0) {
+                attacker_sq = @intCast(@ctz(piece_attackers));
+                attacker_piece_val = PIECE_VALUES[t];
+                found = true;
+                break;
             }
         }
-
-        if (!found) {
-            break;
-        }
+        if (!found) break;
 
         // Switch sides
-        side = if (side == types.Color.White) types.Color.Black else types.Color.White;
+        side = side.other();
 
         // Update the value (negamax style)
         value = -value - 1 - attacker_piece_val;
@@ -347,10 +308,5 @@ pub fn see(board: *const types.Board, move: move_gen.Move, threshold: i32) bool 
         }
     }
 
-    // Return the final result
     return side != board.get_piece_color_at(move.from).?;
-}
-
-inline fn moves_equal(m1: move_gen.Move, m2: move_gen.Move) bool {
-    return m1.from == m2.from and m1.to == m2.to and m1.flags == m2.flags;
 }

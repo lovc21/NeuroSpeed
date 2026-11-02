@@ -37,9 +37,7 @@ pub inline fn pawn_attacks_from_bitboard(comptime color: types.Color, bb: types.
         ((bb & ~(@intFromEnum(types.MaskFile.AFILE))) >> 9) | ((bb & ~(@intFromEnum(types.MaskFile.HFILE))) >> 7);
 }
 
-// Comptime consts (rodata): pawn table pair + empty-board pseudo-legal
-// attacks. The Pawn row is all-zero — pawn attacks go through pawn_attacks,
-// never piece_attacks.
+// Empty-board attacks per piece; the pawn row is zero, use pawn_attacks.
 pub const pawn_attacks: [2][64]u64 = .{
     tabeles.White_pawn_attacks_tabele,
     tabeles.Black_pawn_attacks_tabele,
@@ -72,8 +70,8 @@ pub fn rook_attack_mask_from_bitboard(bb: types.Bitboard) types.Bitboard {
     // convert bitboard to square index
     const square_index = @ctz(bb);
 
-    const rank: i64 = @intCast(square_index / 8);
-    const file: i64 = @intCast(square_index % 8);
+    const rank: i64 = @intCast(types.rank_of(square_index));
+    const file: i64 = @intCast(types.file_of(square_index));
     const one: types.Bitboard = 1;
 
     var r: i64 = rank + 1;
@@ -108,8 +106,8 @@ pub fn bishop_attack_mask_from_bitboard(bb: types.Bitboard) types.Bitboard {
     // convert bitboard to square index
     const square_index = @ctz(bb);
 
-    const rank: i64 = @intCast(square_index / 8);
-    const file: i64 = @intCast(square_index % 8);
+    const rank: i64 = @intCast(types.rank_of(square_index));
+    const file: i64 = @intCast(types.file_of(square_index));
     const one: types.Bitboard = 1;
 
     var r: i64 = rank + 1;
@@ -170,8 +168,8 @@ pub inline fn sliding_attacks(sq_idx: u8, occ: u64, mask: u64) u64 {
 }
 
 pub inline fn get_rook_attacks_for_init(square: u8, occ: u64) u64 {
-    const rankMask: u64 = types.mask_rank[square / 8];
-    const fileMask: u64 = types.mask_file[square % 8];
+    const rankMask: u64 = types.mask_rank[types.rank_of(square)];
+    const fileMask: u64 = types.mask_file[types.file_of(square)];
     const horizontalAttacks = sliding_attacks(square, occ, rankMask);
     const verticalAttacks = sliding_attacks(square, occ, fileMask);
     return horizontalAttacks | verticalAttacks;
@@ -214,12 +212,11 @@ pub inline fn get_rook_attacks(square: u6, occ: u64) u64 {
     return rook_attacks_table[square][idx];
 }
 
-// Correct on-the-fly attack generation for bishops using simple ray-casting.
-// This is a one-time cost at initialization.
+// Bishop attacks by ray-casting, only used at init.
 pub fn get_bishop_attacks_for_init(square: u8, blockers: u64) u64 {
     var attacks: u64 = 0;
-    const r: i8 = @intCast(square / 8);
-    const f: i8 = @intCast(square % 8);
+    const r: i8 = @intCast(types.rank_of(square));
+    const f: i8 = @intCast(types.file_of(square));
     const one: u64 = 1;
 
     // North-East
@@ -353,9 +350,6 @@ pub fn piece_attacks(
 }
 
 pub fn init_attacks() void {
-    // Only the magic tables need runtime init (2.25 MB, BSS — comptime-baking
-    // them would bloat the binary for zero fold benefit). Everything else
-    // (pawn/pseudo-legal/between/line/ray tables) is comptime rodata now.
     init_bishop_attacks();
     init_rook_attacks();
 }

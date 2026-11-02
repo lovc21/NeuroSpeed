@@ -5,3 +5,7 @@ zig-out/
 CLAUDE.md
 NeuroSpeed
 .direnv/
+
+# nix build output symlinks
+result
+result-*

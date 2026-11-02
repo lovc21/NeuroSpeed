@@ -31,5 +31,5 @@ build-bolt bolt-depth="17": build
   perf2bolt -p "$W/perf.data" -o "$W/ns.fdata" $BIN
   llvm-bolt $BIN -o $BIN.bolt -data "$W/ns.fdata" -reorder-blocks=ext-tsp
   FP=$(printf 'bench 6\nquit\n' | $BIN.bolt 2>/dev/null | tail -1 | awk '{print $1}')
-  if [ "$FP" != "56024" ]; then echo "FINGERPRINT MISMATCH: $FP != 56024 — discard $BIN.bolt"; exit 1; fi
+  if [ "$FP" != "57563" ]; then echo "FINGERPRINT MISMATCH: $FP != 57563 — discard $BIN.bolt"; exit 1; fi
   echo "OK: $BIN.bolt (bench fingerprint $FP verified)"

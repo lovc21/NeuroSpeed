@@ -2,8 +2,9 @@ const types = @import("types.zig");
 const eval = @import("evaluation.zig");
 const zobrist = @import("zobrist.zig");
 const nnue = @import("nnue.zig");
+const attacks = @import("attacks.zig");
 
-// Define a move (packed 16-bit: 6+6+4 bits for cache-friendly MoveList)
+// A move packed into 16 bits: from (6), to (6), flags (4)
 pub const Move = packed struct {
     from: u6,
     to: u6,
@@ -35,12 +36,25 @@ pub const Move = packed struct {
         };
     }
 
-    pub inline fn is_double_push(self: Move) bool {
-        return self.flags == types.MoveFlags.DOUBLE_PUSH;
+    // Same from, to and flags
+    pub inline fn eql(a: Move, b: Move) bool {
+        return a.from == b.from and a.to == b.to and a.flags == b.flags;
     }
 
-    pub inline fn is_en_passant(self: Move) bool {
-        return self.flags == types.MoveFlags.EN_PASSANT;
+    // Same from and to squares, flags ignored
+    pub inline fn same_squares(a: Move, b: Move) bool {
+        return a.from == b.from and a.to == b.to;
+    }
+
+    // UCI text ("e2e4", "e7e8q") written into buf
+    pub fn to_uci(self: Move, buf: *[5]u8) []const u8 {
+        const from = types.SquareString.getSquareToString(@enumFromInt(self.from));
+        const to = types.SquareString.getSquareToString(@enumFromInt(self.to));
+        buf[0..2].* = from[0..2].*;
+        buf[2..4].* = to[0..2].*;
+        if (!self.is_promotion()) return buf[0..4];
+        buf[4] = self.promotion_char();
+        return buf[0..5];
     }
 
     pub inline fn is_castling(self: Move) bool {
@@ -58,240 +72,50 @@ pub const Move = packed struct {
     }
 };
 
-// Update castling rights using bitboard masks
-inline fn update_castling_rights(board: *types.Board, source_square: u6, target_square: u6) void {
-    board.castle &= types.castle_mask[source_square] & types.castle_mask[target_square];
-}
-
-inline fn is_promotion_move(flags: types.MoveFlags) bool {
+// Piece a promotion move creates for `color`
+inline fn promoted_piece(flags: types.MoveFlags, comptime color: types.Color) types.Piece {
+    const white = color == types.Color.White;
     return switch (flags) {
-        types.MoveFlags.PR_QUEEN, types.MoveFlags.PR_ROOK, types.MoveFlags.PR_BISHOP, types.MoveFlags.PR_KNIGHT, types.MoveFlags.PC_QUEEN, types.MoveFlags.PC_ROOK, types.MoveFlags.PC_BISHOP, types.MoveFlags.PC_KNIGHT => true,
-        else => false,
-    };
-}
-
-inline fn get_promoted_piece(flags: types.MoveFlags, side: types.Color) types.Piece {
-    return switch (flags) {
-        types.MoveFlags.PR_QUEEN, types.MoveFlags.PC_QUEEN => if (side == types.Color.White) types.Piece.WHITE_QUEEN else types.Piece.BLACK_QUEEN,
-        types.MoveFlags.PR_ROOK, types.MoveFlags.PC_ROOK => if (side == types.Color.White) types.Piece.WHITE_ROOK else types.Piece.BLACK_ROOK,
-        types.MoveFlags.PR_BISHOP, types.MoveFlags.PC_BISHOP => if (side == types.Color.White) types.Piece.WHITE_BISHOP else types.Piece.BLACK_BISHOP,
-        types.MoveFlags.PR_KNIGHT, types.MoveFlags.PC_KNIGHT => if (side == types.Color.White) types.Piece.WHITE_KNIGHT else types.Piece.BLACK_KNIGHT,
+        types.MoveFlags.PR_QUEEN, types.MoveFlags.PC_QUEEN => if (white) types.Piece.WHITE_QUEEN else types.Piece.BLACK_QUEEN,
+        types.MoveFlags.PR_ROOK, types.MoveFlags.PC_ROOK => if (white) types.Piece.WHITE_ROOK else types.Piece.BLACK_ROOK,
+        types.MoveFlags.PR_BISHOP, types.MoveFlags.PC_BISHOP => if (white) types.Piece.WHITE_BISHOP else types.Piece.BLACK_BISHOP,
+        types.MoveFlags.PR_KNIGHT, types.MoveFlags.PC_KNIGHT => if (white) types.Piece.WHITE_KNIGHT else types.Piece.BLACK_KNIGHT,
         else => types.Piece.NO_PIECE,
     };
 }
 
-// Minimal undo info for perft (no zobrist, no eval, no full board copy)
-pub const PerftUndo = struct {
-    captured: types.Piece, // captured piece (NO_PIECE if quiet)
-    castle: u8, // old castling rights
-    enpassant: types.square, // old ep square
-};
-
-/// Fast make_move for perft only. No zobrist, no eval, maintains mailbox.
-/// `color` is the mover's side (== board.side at entry), comptime so every
-/// color-derived branch below folds.
-pub inline fn make_move_perft(board: *types.Board, move: Move, comptime color: types.Color) PerftUndo {
-    const from = move.from;
-    const to = move.to;
-    const flags = move.flags;
-
-    // O(1) piece lookup from mailbox
-    const piece = board.board[from];
-    const piece_idx = @intFromEnum(piece);
-    const moving_white = comptime color == types.Color.White;
-
-    // Save captured piece BEFORE overwriting mailbox
-    var undo = PerftUndo{
-        .captured = board.board[to], // NO_PIECE for quiet/ep/castle moves
-        .castle = board.castle,
-        .enpassant = board.enpassant,
-    };
-
-    // Remove captured piece from its bitboard (regular captures)
-    if (undo.captured != types.Piece.NO_PIECE) {
-        board.pieces[@intFromEnum(undo.captured)] ^= types.square_bb[to];
-    }
-
-    // Move piece in bitboards (XOR trick: clear source + set target in one op)
-    board.pieces[piece_idx] ^= types.square_bb[from] | types.square_bb[to];
-
-    // Update mailbox
-    board.board[to] = piece;
-    board.board[from] = types.Piece.NO_PIECE;
-
-    // Handle en passant
-    if (flags == types.MoveFlags.EN_PASSANT) {
-        const captured_sq: u6 = if (moving_white) to -% 8 else to +% 8;
-        const captured_pawn: types.Piece = if (moving_white) types.Piece.BLACK_PAWN else types.Piece.WHITE_PAWN;
-        undo.captured = captured_pawn;
-        board.pieces[@intFromEnum(captured_pawn)] ^= types.square_bb[captured_sq];
-        board.board[captured_sq] = types.Piece.NO_PIECE;
-    }
-
-    // Handle promotions
-    if (is_promotion_move(flags)) {
-        // Remove the pawn from target, add promoted piece
-        board.pieces[piece_idx] ^= types.square_bb[to]; // remove pawn
-        const side: types.Color = if (moving_white) types.Color.White else types.Color.Black;
-        const promoted = get_promoted_piece(flags, side);
-        board.pieces[@intFromEnum(promoted)] ^= types.square_bb[to]; // add promoted piece
-        board.board[to] = promoted;
-    }
-
-    // Reset en passant
-    board.enpassant = types.square.NO_SQUARE;
-
-    // Double pawn push - set ep square
-    if (flags == types.MoveFlags.DOUBLE_PUSH) {
-        board.enpassant = if (moving_white) @enumFromInt(to - 8) else @enumFromInt(to + 8);
-    }
-
-    // Castling - move the rook
-    if (flags == types.MoveFlags.OO or flags == types.MoveFlags.OOO) {
-        const rook_piece: types.Piece = if (moving_white) types.Piece.WHITE_ROOK else types.Piece.BLACK_ROOK;
-        const rook_idx = @intFromEnum(rook_piece);
-        switch (to) {
-            @intFromEnum(types.square.g1) => {
-                board.pieces[rook_idx] ^= types.square_bb[@intFromEnum(types.square.h1)] | types.square_bb[@intFromEnum(types.square.f1)];
-                board.board[@intFromEnum(types.square.f1)] = rook_piece;
-                board.board[@intFromEnum(types.square.h1)] = types.Piece.NO_PIECE;
-            },
-            @intFromEnum(types.square.c1) => {
-                board.pieces[rook_idx] ^= types.square_bb[@intFromEnum(types.square.a1)] | types.square_bb[@intFromEnum(types.square.d1)];
-                board.board[@intFromEnum(types.square.d1)] = rook_piece;
-                board.board[@intFromEnum(types.square.a1)] = types.Piece.NO_PIECE;
-            },
-            @intFromEnum(types.square.g8) => {
-                board.pieces[rook_idx] ^= types.square_bb[@intFromEnum(types.square.h8)] | types.square_bb[@intFromEnum(types.square.f8)];
-                board.board[@intFromEnum(types.square.f8)] = rook_piece;
-                board.board[@intFromEnum(types.square.h8)] = types.Piece.NO_PIECE;
-            },
-            @intFromEnum(types.square.c8) => {
-                board.pieces[rook_idx] ^= types.square_bb[@intFromEnum(types.square.a8)] | types.square_bb[@intFromEnum(types.square.d8)];
-                board.board[@intFromEnum(types.square.d8)] = rook_piece;
-                board.board[@intFromEnum(types.square.a8)] = types.Piece.NO_PIECE;
-            },
-            else => {},
-        }
-    }
-
-    // Update castling rights
-    update_castling_rights(board, from, to);
-
-    // Flip side
-    board.side = comptime if (moving_white) types.Color.Black else types.Color.White;
-
-    return undo;
+// Rook from/to squares of a castling move: O-O h->f, O-O-O a->d
+inline fn castle_rook_squares(move: Move) [2]u6 {
+    return if (move.flags == types.MoveFlags.OO) .{ move.to + 1, move.to - 1 } else .{ move.to - 2, move.to + 1 };
 }
 
-/// Fast unmake_move for perft only. Reverses make_move_perft.
-/// `color` is the MOVER's side (board.side is its opponent at entry).
-pub inline fn unmake_move_perft(board: *types.Board, move: Move, undo: PerftUndo, comptime color: types.Color) void {
-    const from = move.from;
-    const to = move.to;
-    const flags = move.flags;
-
-    // Flip side back
-    board.side = color;
-
-    // Get the piece on target (may be promoted piece)
-    var piece = board.board[to];
-    var piece_idx = @intFromEnum(piece);
-    const moving_white = comptime color == types.Color.White;
-
-    // Undo castling rook movement
-    if (flags == types.MoveFlags.OO or flags == types.MoveFlags.OOO) {
-        const rook_piece: types.Piece = if (moving_white) types.Piece.WHITE_ROOK else types.Piece.BLACK_ROOK;
-        const rook_idx = @intFromEnum(rook_piece);
-        switch (to) {
-            @intFromEnum(types.square.g1) => {
-                board.pieces[rook_idx] ^= types.square_bb[@intFromEnum(types.square.f1)] | types.square_bb[@intFromEnum(types.square.h1)];
-                board.board[@intFromEnum(types.square.h1)] = rook_piece;
-                board.board[@intFromEnum(types.square.f1)] = types.Piece.NO_PIECE;
-            },
-            @intFromEnum(types.square.c1) => {
-                board.pieces[rook_idx] ^= types.square_bb[@intFromEnum(types.square.d1)] | types.square_bb[@intFromEnum(types.square.a1)];
-                board.board[@intFromEnum(types.square.a1)] = rook_piece;
-                board.board[@intFromEnum(types.square.d1)] = types.Piece.NO_PIECE;
-            },
-            @intFromEnum(types.square.g8) => {
-                board.pieces[rook_idx] ^= types.square_bb[@intFromEnum(types.square.f8)] | types.square_bb[@intFromEnum(types.square.h8)];
-                board.board[@intFromEnum(types.square.h8)] = rook_piece;
-                board.board[@intFromEnum(types.square.f8)] = types.Piece.NO_PIECE;
-            },
-            @intFromEnum(types.square.c8) => {
-                board.pieces[rook_idx] ^= types.square_bb[@intFromEnum(types.square.d8)] | types.square_bb[@intFromEnum(types.square.a8)];
-                board.board[@intFromEnum(types.square.a8)] = rook_piece;
-                board.board[@intFromEnum(types.square.d8)] = types.Piece.NO_PIECE;
-            },
-            else => {},
-        }
-    }
-
-    // Undo promotion: remove promoted piece, restore pawn at source only
-    if (is_promotion_move(flags)) {
-        board.pieces[piece_idx] ^= types.square_bb[to]; // remove promoted piece
-        const pawn: types.Piece = if (moving_white) types.Piece.WHITE_PAWN else types.Piece.BLACK_PAWN;
-        piece = pawn;
-        piece_idx = @intFromEnum(pawn);
-        // Pawn was cleared from both `from` and `to` during make (XOR from|to, then XOR to),
-        // so only restore at `from` — toggling `to` would leave a phantom pawn.
-        board.pieces[piece_idx] ^= types.square_bb[from];
-    } else {
-        // Move piece back in bitboards
-        board.pieces[piece_idx] ^= types.square_bb[from] | types.square_bb[to];
-    }
-
-    // Update mailbox
-    board.board[from] = piece;
-
-    // Undo en passant capture
-    if (flags == types.MoveFlags.EN_PASSANT) {
-        board.board[to] = types.Piece.NO_PIECE;
-        const captured_sq: u6 = if (moving_white) to -% 8 else to +% 8;
-        board.pieces[@intFromEnum(undo.captured)] ^= types.square_bb[captured_sq];
-        board.board[captured_sq] = undo.captured;
-    } else {
-        // Restore captured piece (or NO_PIECE for quiet moves)
-        board.board[to] = undo.captured;
-        if (undo.captured != types.Piece.NO_PIECE) {
-            board.pieces[@intFromEnum(undo.captured)] ^= types.square_bb[to];
-        }
-    }
-
-    // Restore castling rights and ep
-    board.castle = undo.castle;
-    board.enpassant = undo.enpassant;
+// Square of the pawn taken en passant (behind the target square)
+inline fn ep_capture_square(to: u6, comptime color: types.Color) u6 {
+    return if (color == types.Color.White) to -% 8 else to +% 8;
 }
 
-// Undo info for search path (compact alternative to full BoardState save/restore)
+// Everything make_move_search changes that unmake can't recompute
 pub const SearchUndo = struct {
-    captured: types.Piece, // captured piece (NO_PIECE if quiet)
-    castle: u8, // old castling rights
-    enpassant: types.square, // old ep square
-    hash: u64, // old Zobrist hash
-    halfmove: u16, // old half-move clock
-    evaluator: eval.Evaluator, // old eval state
+    captured: types.Piece, // NO_PIECE if nothing was captured
+    castle: u8,
+    enpassant: types.square,
+    hash: u64,
+    halfmove: u16,
+    evaluator: eval.Evaluator,
 };
 
-/// Make move for search path. Like make_move_perft but also updates Zobrist hash and eval.
-/// Uses O(1) mailbox lookup instead of scanning bitboards. Returns SearchUndo for unmake.
-/// `color` is the mover's side (== board.side at entry), comptime so every
-/// color-derived branch below folds.
+// Make a move: bitboards, mailbox, hash, eval and NNUE accumulator (`color` = mover)
 pub inline fn make_move_search(board: *types.Board, move: Move, comptime color: types.Color) SearchUndo {
     const from = move.from;
     const to = move.to;
     const flags = move.flags;
-
-    // O(1) piece lookup from mailbox
     const piece = board.board[from];
     const piece_idx = @intFromEnum(piece);
     const moving_white = comptime color == types.Color.White;
-    const pi = zobrist.piece_index(piece);
+    const rook: types.Piece = if (moving_white) types.Piece.WHITE_ROOK else types.Piece.BLACK_ROOK;
 
-    // Save undo info
     var undo = SearchUndo{
-        .captured = board.board[to], // NO_PIECE for quiet/ep/castle moves
+        .captured = board.board[to], // NO_PIECE for quiet, EP and castling moves
         .castle = board.castle,
         .enpassant = board.enpassant,
         .hash = board.hash,
@@ -299,180 +123,110 @@ pub inline fn make_move_search(board: *types.Board, move: Move, comptime color: 
         .evaluator = eval.global_evaluator,
     };
 
-    // Zobrist: remove piece from source, add to target
-    board.hash ^= zobrist.piece_keys[pi][from];
-    board.hash ^= zobrist.piece_keys[pi][to];
+    board.hash ^= zobrist.piece_keys[piece_idx][from];
+    board.hash ^= zobrist.piece_keys[piece_idx][to];
 
-    // Remove captured piece from its bitboard (regular captures only)
+    // Remove a piece captured on the target square
     if (undo.captured != types.Piece.NO_PIECE) {
         board.pieces[@intFromEnum(undo.captured)] ^= types.square_bb[to];
-        board.hash ^= zobrist.piece_keys[zobrist.piece_index(undo.captured)][to];
+        board.hash ^= zobrist.piece_keys[@intFromEnum(undo.captured)][to];
         eval.global_evaluator.remove_piece_phase(undo.captured);
         eval.global_evaluator.remove_piece_material(undo.captured);
         eval.global_evaluator.remove_piece_psqt(undo.captured, to);
     }
 
-    // Move piece in bitboards (XOR trick: clear source + set target in one op)
+    // Move the piece (one XOR clears from and sets to)
     board.pieces[piece_idx] ^= types.square_bb[from] | types.square_bb[to];
-
-    // Incremental PSQT: move piece from source to target square
     eval.global_evaluator.remove_piece_psqt(piece, from);
     eval.global_evaluator.add_piece_psqt(piece, to);
-
-    // Update mailbox
     board.board[to] = piece;
     board.board[from] = types.Piece.NO_PIECE;
 
-    // Handle en passant capture
+    // En passant: remove the pawn behind the target square
     if (flags == types.MoveFlags.EN_PASSANT) {
-        const captured_sq: u6 = if (moving_white) to -% 8 else to +% 8;
+        const captured_sq = ep_capture_square(to, color);
         const captured_pawn: types.Piece = if (moving_white) types.Piece.BLACK_PAWN else types.Piece.WHITE_PAWN;
         undo.captured = captured_pawn;
         board.pieces[@intFromEnum(captured_pawn)] ^= types.square_bb[captured_sq];
         board.board[captured_sq] = types.Piece.NO_PIECE;
-        board.hash ^= zobrist.piece_keys[zobrist.piece_index(captured_pawn)][captured_sq];
+        board.hash ^= zobrist.piece_keys[@intFromEnum(captured_pawn)][captured_sq];
         eval.global_evaluator.remove_piece_phase(captured_pawn);
         eval.global_evaluator.remove_piece_material(captured_pawn);
         eval.global_evaluator.remove_piece_psqt(captured_pawn, captured_sq);
     }
 
-    // Handle promotions
-    if (is_promotion_move(flags)) {
-        // Remove the pawn from target, add promoted piece
-        board.pieces[piece_idx] ^= types.square_bb[to]; // remove pawn
-        const side: types.Color = if (moving_white) types.Color.White else types.Color.Black;
-        const promoted = get_promoted_piece(flags, side);
-        board.pieces[@intFromEnum(promoted)] ^= types.square_bb[to]; // add promoted piece
+    // Promotion: swap the pawn on the target square for the new piece
+    if (move.is_promotion()) {
+        const promoted = promoted_piece(flags, color);
+        board.pieces[piece_idx] ^= types.square_bb[to];
+        board.pieces[@intFromEnum(promoted)] ^= types.square_bb[to];
         board.board[to] = promoted;
-        // Zobrist: remove pawn at target (was moved there above), add promoted piece
-        board.hash ^= zobrist.piece_keys[pi][to];
-        board.hash ^= zobrist.piece_keys[zobrist.piece_index(promoted)][to];
-        // Eval: remove pawn, add promoted piece
+        board.hash ^= zobrist.piece_keys[piece_idx][to];
+        board.hash ^= zobrist.piece_keys[@intFromEnum(promoted)][to];
         eval.global_evaluator.remove_piece_phase(piece);
         eval.global_evaluator.remove_piece_material(piece);
         eval.global_evaluator.put_piece_phase(promoted);
         eval.global_evaluator.add_piece_material(promoted);
-        // Incremental PSQT: the move step added the pawn at `to`; replace it with the promoted piece.
         eval.global_evaluator.remove_piece_psqt(piece, to);
         eval.global_evaluator.add_piece_psqt(promoted, to);
     }
 
-    // Reset en passant
+    // Set an EP square only if an enemy pawn can take there (a phantom one would split the hash)
     board.enpassant = types.square.NO_SQUARE;
-
-    // Double pawn push - set ep square
     if (flags == types.MoveFlags.DOUBLE_PUSH) {
-        board.enpassant = if (moving_white) @enumFromInt(to - 8) else @enumFromInt(to + 8);
+        const ep: u6 = if (moving_white) to - 8 else to + 8;
+        const enemy_pawns = board.pieces[@intFromEnum(if (moving_white) types.Piece.BLACK_PAWN else types.Piece.WHITE_PAWN)];
+        if (attacks.pawn_attacks_from_square(ep, color) & enemy_pawns != 0) board.enpassant = @enumFromInt(ep);
     }
 
-    // Castling - move the rook
-    if (flags == types.MoveFlags.OO or flags == types.MoveFlags.OOO) {
-        const rook_piece: types.Piece = if (moving_white) types.Piece.WHITE_ROOK else types.Piece.BLACK_ROOK;
-        const rook_idx = @intFromEnum(rook_piece);
-        const rook_pi = zobrist.piece_index(rook_piece);
-        switch (to) {
-            @intFromEnum(types.square.g1) => {
-                board.pieces[rook_idx] ^= types.square_bb[@intFromEnum(types.square.h1)] | types.square_bb[@intFromEnum(types.square.f1)];
-                board.board[@intFromEnum(types.square.f1)] = rook_piece;
-                board.board[@intFromEnum(types.square.h1)] = types.Piece.NO_PIECE;
-                board.hash ^= zobrist.piece_keys[rook_pi][@intFromEnum(types.square.h1)];
-                board.hash ^= zobrist.piece_keys[rook_pi][@intFromEnum(types.square.f1)];
-                eval.global_evaluator.remove_piece_psqt(rook_piece, @intCast(@intFromEnum(types.square.h1)));
-                eval.global_evaluator.add_piece_psqt(rook_piece, @intCast(@intFromEnum(types.square.f1)));
-            },
-            @intFromEnum(types.square.c1) => {
-                board.pieces[rook_idx] ^= types.square_bb[@intFromEnum(types.square.a1)] | types.square_bb[@intFromEnum(types.square.d1)];
-                board.board[@intFromEnum(types.square.d1)] = rook_piece;
-                board.board[@intFromEnum(types.square.a1)] = types.Piece.NO_PIECE;
-                board.hash ^= zobrist.piece_keys[rook_pi][@intFromEnum(types.square.a1)];
-                board.hash ^= zobrist.piece_keys[rook_pi][@intFromEnum(types.square.d1)];
-                eval.global_evaluator.remove_piece_psqt(rook_piece, @intCast(@intFromEnum(types.square.a1)));
-                eval.global_evaluator.add_piece_psqt(rook_piece, @intCast(@intFromEnum(types.square.d1)));
-            },
-            @intFromEnum(types.square.g8) => {
-                board.pieces[rook_idx] ^= types.square_bb[@intFromEnum(types.square.h8)] | types.square_bb[@intFromEnum(types.square.f8)];
-                board.board[@intFromEnum(types.square.f8)] = rook_piece;
-                board.board[@intFromEnum(types.square.h8)] = types.Piece.NO_PIECE;
-                board.hash ^= zobrist.piece_keys[rook_pi][@intFromEnum(types.square.h8)];
-                board.hash ^= zobrist.piece_keys[rook_pi][@intFromEnum(types.square.f8)];
-                eval.global_evaluator.remove_piece_psqt(rook_piece, @intCast(@intFromEnum(types.square.h8)));
-                eval.global_evaluator.add_piece_psqt(rook_piece, @intCast(@intFromEnum(types.square.f8)));
-            },
-            @intFromEnum(types.square.c8) => {
-                board.pieces[rook_idx] ^= types.square_bb[@intFromEnum(types.square.a8)] | types.square_bb[@intFromEnum(types.square.d8)];
-                board.board[@intFromEnum(types.square.d8)] = rook_piece;
-                board.board[@intFromEnum(types.square.a8)] = types.Piece.NO_PIECE;
-                board.hash ^= zobrist.piece_keys[rook_pi][@intFromEnum(types.square.a8)];
-                board.hash ^= zobrist.piece_keys[rook_pi][@intFromEnum(types.square.d8)];
-                eval.global_evaluator.remove_piece_psqt(rook_piece, @intCast(@intFromEnum(types.square.a8)));
-                eval.global_evaluator.add_piece_psqt(rook_piece, @intCast(@intFromEnum(types.square.d8)));
-            },
-            else => {},
-        }
+    // Castling: move the rook too
+    if (move.is_castling()) {
+        const rf, const rt = castle_rook_squares(move);
+        board.pieces[@intFromEnum(rook)] ^= types.square_bb[rf] | types.square_bb[rt];
+        board.board[rt] = rook;
+        board.board[rf] = types.Piece.NO_PIECE;
+        board.hash ^= zobrist.piece_keys[@intFromEnum(rook)][rf];
+        board.hash ^= zobrist.piece_keys[@intFromEnum(rook)][rt];
+        eval.global_evaluator.remove_piece_psqt(rook, rf);
+        eval.global_evaluator.add_piece_psqt(rook, rt);
     }
 
-    // Update castling rights
-    update_castling_rights(board, from, to);
-
-    // Zobrist: update castling rights (XOR out old, XOR in new)
+    // Castling rights, EP square and side to move in the hash
+    board.castle &= types.castle_mask[from] & types.castle_mask[to];
     if (undo.castle != board.castle) {
-        if (undo.castle & @intFromEnum(types.Castle.WK) != 0) board.hash ^= zobrist.castle_keys[0];
-        if (undo.castle & @intFromEnum(types.Castle.WQ) != 0) board.hash ^= zobrist.castle_keys[1];
-        if (undo.castle & @intFromEnum(types.Castle.BK) != 0) board.hash ^= zobrist.castle_keys[2];
-        if (undo.castle & @intFromEnum(types.Castle.BQ) != 0) board.hash ^= zobrist.castle_keys[3];
-        if (board.castle & @intFromEnum(types.Castle.WK) != 0) board.hash ^= zobrist.castle_keys[0];
-        if (board.castle & @intFromEnum(types.Castle.WQ) != 0) board.hash ^= zobrist.castle_keys[1];
-        if (board.castle & @intFromEnum(types.Castle.BK) != 0) board.hash ^= zobrist.castle_keys[2];
-        if (board.castle & @intFromEnum(types.Castle.BQ) != 0) board.hash ^= zobrist.castle_keys[3];
+        board.hash ^= zobrist.castle_hash[undo.castle] ^ zobrist.castle_hash[board.castle];
     }
-
-    // Zobrist: update en passant
     if (undo.enpassant != types.square.NO_SQUARE) {
-        board.hash ^= zobrist.ep_keys[@intFromEnum(undo.enpassant) % 8];
+        board.hash ^= zobrist.ep_keys[types.file_of(@intFromEnum(undo.enpassant))];
     }
     if (board.enpassant != types.square.NO_SQUARE) {
-        board.hash ^= zobrist.ep_keys[@intFromEnum(board.enpassant) % 8];
+        board.hash ^= zobrist.ep_keys[types.file_of(@intFromEnum(board.enpassant))];
     }
 
-    // Update half-move clock: reset on pawn moves or captures, else increment
+    // 50-move clock resets on pawn moves and captures (EP included)
     const is_pawn_move = piece == types.Piece.WHITE_PAWN or piece == types.Piece.BLACK_PAWN;
-    // undo.captured is set for regular captures and for en passant (updated above)
-    const is_capture_move = undo.captured != types.Piece.NO_PIECE;
-    board.halfmove = if (is_pawn_move or is_capture_move) 0 else board.halfmove + 1;
+    board.halfmove = if (is_pawn_move or undo.captured != types.Piece.NO_PIECE) 0 else board.halfmove + 1;
 
-    // Zobrist: flip side to move
     board.hash ^= zobrist.side_key;
-
-    // Flip side
     board.side = comptime if (moving_white) types.Color.Black else types.Color.White;
 
-    // Incremental NNUE accumulator push (search path only; gated by acc_active).
-    // undo.captured is final here (EN_PASSANT replaced it with the taken pawn).
-    // `board` is the POST-move position, so nnue.apply reads the new king files.
+    // Push the NNUE accumulator (board is already the post-move position)
     if (nnue.acc_active) {
         var d = nnue.FeatDelta{};
-        if (flags == types.MoveFlags.OO or flags == types.MoveFlags.OOO) {
-            // King from->to plus rook: OO rook h->f (to+1 -> to-1), OOO rook a->d (to-2 -> to+1).
-            const rook_piece: types.Piece = if (moving_white) types.Piece.WHITE_ROOK else types.Piece.BLACK_ROOK;
-            const r_idx: usize = @intFromEnum(rook_piece);
-            const oo = flags == types.MoveFlags.OO;
-            const rf: u6 = if (oo) to + 1 else to - 2;
-            const rt: u6 = if (oo) to - 1 else to + 1;
+        if (move.is_castling()) {
+            const rf, const rt = castle_rook_squares(move);
             d.add(piece_idx, to);
-            d.add(r_idx, rt);
+            d.add(@intFromEnum(rook), rt);
             d.sub(piece_idx, from);
-            d.sub(r_idx, rf);
-        } else if (is_promotion_move(flags)) {
-            const side: types.Color = if (moving_white) types.Color.White else types.Color.Black;
-            const promoted_idx: usize = @intFromEnum(get_promoted_piece(flags, side));
-            d.add(promoted_idx, to);
+            d.sub(@intFromEnum(rook), rf);
+        } else if (move.is_promotion()) {
+            d.add(@intFromEnum(promoted_piece(flags, color)), to);
             d.sub(piece_idx, from);
             if (undo.captured != types.Piece.NO_PIECE) d.sub(@intFromEnum(undo.captured), to);
         } else if (flags == types.MoveFlags.EN_PASSANT) {
-            const captured_sq: u6 = if (moving_white) to -% 8 else to +% 8;
             d.add(piece_idx, to);
             d.sub(piece_idx, from);
-            d.sub(@intFromEnum(undo.captured), captured_sq);
+            d.sub(@intFromEnum(undo.captured), ep_capture_square(to, color));
         } else if (undo.captured != types.Piece.NO_PIECE) {
             d.add(piece_idx, to);
             d.sub(piece_idx, from);
@@ -487,86 +241,48 @@ pub inline fn make_move_search(board: *types.Board, move: Move, comptime color: 
     return undo;
 }
 
-/// Unmake move for search path. Reverses make_move_search using saved undo info.
-/// Restores hash and eval from undo struct instead of re-XORing.
-/// `color` is the MOVER's side (board.side is its opponent at entry).
+// Undo make_move_search; hash, eval and clocks come back from `undo` (`color` = mover)
 pub inline fn unmake_move_search(board: *types.Board, move: Move, undo: SearchUndo, comptime color: types.Color) void {
     const from = move.from;
     const to = move.to;
-    const flags = move.flags;
-
-    // Pop the incremental NNUE accumulator pushed by make_move_search.
-    if (nnue.acc_active) {
-        nnue.pop_acc();
-    }
-
-    // Flip side back
-    board.side = color;
-
-    // Get the piece on target (may be promoted piece)
-    var piece = board.board[to];
-    var piece_idx = @intFromEnum(piece);
     const moving_white = comptime color == types.Color.White;
 
-    // Undo castling rook movement
-    if (flags == types.MoveFlags.OO or flags == types.MoveFlags.OOO) {
-        const rook_piece: types.Piece = if (moving_white) types.Piece.WHITE_ROOK else types.Piece.BLACK_ROOK;
-        const rook_idx = @intFromEnum(rook_piece);
-        switch (to) {
-            @intFromEnum(types.square.g1) => {
-                board.pieces[rook_idx] ^= types.square_bb[@intFromEnum(types.square.f1)] | types.square_bb[@intFromEnum(types.square.h1)];
-                board.board[@intFromEnum(types.square.h1)] = rook_piece;
-                board.board[@intFromEnum(types.square.f1)] = types.Piece.NO_PIECE;
-            },
-            @intFromEnum(types.square.c1) => {
-                board.pieces[rook_idx] ^= types.square_bb[@intFromEnum(types.square.d1)] | types.square_bb[@intFromEnum(types.square.a1)];
-                board.board[@intFromEnum(types.square.a1)] = rook_piece;
-                board.board[@intFromEnum(types.square.d1)] = types.Piece.NO_PIECE;
-            },
-            @intFromEnum(types.square.g8) => {
-                board.pieces[rook_idx] ^= types.square_bb[@intFromEnum(types.square.f8)] | types.square_bb[@intFromEnum(types.square.h8)];
-                board.board[@intFromEnum(types.square.h8)] = rook_piece;
-                board.board[@intFromEnum(types.square.f8)] = types.Piece.NO_PIECE;
-            },
-            @intFromEnum(types.square.c8) => {
-                board.pieces[rook_idx] ^= types.square_bb[@intFromEnum(types.square.d8)] | types.square_bb[@intFromEnum(types.square.a8)];
-                board.board[@intFromEnum(types.square.a8)] = rook_piece;
-                board.board[@intFromEnum(types.square.d8)] = types.Piece.NO_PIECE;
-            },
-            else => {},
-        }
+    if (nnue.acc_active) nnue.pop_acc();
+    board.side = color;
+
+    // Castling: put the rook back
+    if (move.is_castling()) {
+        const rook: types.Piece = if (moving_white) types.Piece.WHITE_ROOK else types.Piece.BLACK_ROOK;
+        const rf, const rt = castle_rook_squares(move);
+        board.pieces[@intFromEnum(rook)] ^= types.square_bb[rt] | types.square_bb[rf];
+        board.board[rf] = rook;
+        board.board[rt] = types.Piece.NO_PIECE;
     }
 
-    // Undo promotion: remove promoted piece, restore pawn at source only
-    if (is_promotion_move(flags)) {
-        board.pieces[piece_idx] ^= types.square_bb[to]; // remove promoted piece
-        const pawn: types.Piece = if (moving_white) types.Piece.WHITE_PAWN else types.Piece.BLACK_PAWN;
-        piece = pawn;
-        piece_idx = @intFromEnum(pawn);
-        board.pieces[piece_idx] ^= types.square_bb[from];
+    // Move the piece back; a promoted piece turns back into the pawn on `from`
+    var piece = board.board[to];
+    if (move.is_promotion()) {
+        board.pieces[@intFromEnum(piece)] ^= types.square_bb[to];
+        piece = if (moving_white) types.Piece.WHITE_PAWN else types.Piece.BLACK_PAWN;
+        board.pieces[@intFromEnum(piece)] ^= types.square_bb[from];
     } else {
-        // Move piece back in bitboards
-        board.pieces[piece_idx] ^= types.square_bb[from] | types.square_bb[to];
+        board.pieces[@intFromEnum(piece)] ^= types.square_bb[from] | types.square_bb[to];
     }
-
-    // Update mailbox
     board.board[from] = piece;
 
-    // Undo en passant capture
-    if (flags == types.MoveFlags.EN_PASSANT) {
+    // Restore the captured piece (EP: behind the target square)
+    if (move.flags == types.MoveFlags.EN_PASSANT) {
+        const captured_sq = ep_capture_square(to, color);
         board.board[to] = types.Piece.NO_PIECE;
-        const captured_sq: u6 = if (moving_white) to -% 8 else to +% 8;
         board.pieces[@intFromEnum(undo.captured)] ^= types.square_bb[captured_sq];
         board.board[captured_sq] = undo.captured;
     } else {
-        // Restore captured piece (or NO_PIECE for quiet moves)
         board.board[to] = undo.captured;
         if (undo.captured != types.Piece.NO_PIECE) {
             board.pieces[@intFromEnum(undo.captured)] ^= types.square_bb[to];
         }
     }
 
-    // Restore castling rights, ep, halfmove, hash, and eval from undo struct
     board.castle = undo.castle;
     board.enpassant = undo.enpassant;
     board.halfmove = undo.halfmove;
@@ -574,9 +290,7 @@ pub inline fn unmake_move_search(board: *types.Board, move: Move, undo: SearchUn
     eval.global_evaluator = undo.evaluator;
 }
 
-/// Runtime-color dispatchers for callers that don't hold the mover's side at
-/// comptime (UCI move playing, datagen, tests). Search and perft call the
-/// comptime-color versions directly.
+// Runtime-color versions for UCI, datagen and tests
 pub fn make_move_search_rt(board: *types.Board, move: Move) SearchUndo {
     return switch (board.side) {
         .White => make_move_search(board, move, .White),
@@ -585,8 +299,8 @@ pub fn make_move_search_rt(board: *types.Board, move: Move) SearchUndo {
     };
 }
 
+// At unmake board.side is the mover's opponent
 pub fn unmake_move_search_rt(board: *types.Board, move: Move, undo: SearchUndo) void {
-    // At unmake entry board.side is the opponent of the mover.
     switch (board.side) {
         .White => unmake_move_search(board, move, undo, .Black),
         .Black => unmake_move_search(board, move, undo, .White),

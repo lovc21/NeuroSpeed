@@ -1,29 +1,18 @@
 const std = @import("std");
 const types = @import("types.zig");
-const clock = @import("clock.zig");
+const util = @import("util.zig");
 
 const Board = types.Board;
 const Color = types.Color;
 
-/// Master switch. Flipped on once a net is loaded (UCI option / startup).
+/// Use NNUE instead of HCE; set once a net is loaded.
 pub var use_nnue = false;
 
-// --- Architecture (must equal the bullet HIDDEN_SIZE of the trained net) ---
+// Architecture, must match the trained net.
 pub const HIDDEN: usize = 640;
-const FT: usize = 768; // features per king-input-bucket (Chess768)
+const FT: usize = 768; // features per input bucket (Chess768)
 
-// King-input buckets (bullet `ChessBucketsMirrored`): each perspective selects
-// a 768-feature block by its OWN king square, plus the file mirror.
-// NUM_INPUT_BUCKETS=1 = mirror-only (the SHIPPING config: 4 king-file buckets
-// REGRESSED -62.8 vs mirror at 558M data — too starved per bucket; revisit
-// buckets once data >= ~1.5B). The bucket machinery below stays general so a
-// future retry only needs to bump NUM_INPUT_BUCKETS + the buckets_32 layout.
-// MIRROR-ONLY is the shipping config. King-input bucketing REGRESSED for us at
-// every variant: 4 king-FILE buckets -62.8, 10 king-REGION buckets (factorised,
-// done right) -71.4 — both at 558M AND 1.22B. Not a layout/factoriser/data issue;
-// fundamental (eval inflation breaks cp-pruning margins + per-bucket dilution).
-// Buckets are OUT. The machinery stays general (set NUM_INPUT_BUCKETS + the
-// buckets_32 layout to retry) but don't expect it to help without margin re-tune.
+// King input buckets with horizontal mirroring; 1 = mirror only (more buckets tested worse).
 const NUM_INPUT_BUCKETS: usize = 1;
 const INPUT: usize = FT * NUM_INPUT_BUCKETS;
 
@@ -31,15 +20,14 @@ const buckets_32: [32]usize = .{0} ** 32; // all-zero = mirror only
 const buckets_expanded: [64]usize = blk: {
     const mir = [8]usize{ 0, 1, 2, 3, 3, 2, 1, 0 };
     var e: [64]usize = undefined;
-    for (0..64) |idx| e[idx] = buckets_32[(idx / 8) * 4 + mir[idx % 8]];
+    for (0..64) |idx| e[idx] = buckets_32[types.rank_of(idx) * 4 + mir[types.file_of(idx)]];
     break :blk e;
 };
 
-// Output buckets, selected by material count exactly as bullet's
-// `MaterialCount<8>`: bucket = (piece_count - 2) / ceil(32/8).
-const OUTPUT_BUCKETS: usize = 8;
+// Output bucket by piece count, same as bullet MaterialCount<8>.
+pub const OUTPUT_BUCKETS: usize = 8;
 
-// --- Quantisation constants (must equal the bullet training config) ---
+// Quantisation, must match the training config.
 const QA: i32 = 255;
 const QB: i32 = 64;
 const SCALE: i32 = 400;
@@ -47,30 +35,25 @@ const QA64: i64 = QA;
 const QB64: i64 = QB;
 const SCALE64: i64 = SCALE;
 
-// --- Multilayer head (per output bucket): acc(1024) -CReLU-> pairwise(1024->512)
-// per perspective, concat -> 1024 -> L1(1024->16, i8) -SCReLU-> L2(16->32, f32)
-// -SCReLU-> L3(32->1, f32). The accumulator (l0) is unchanged + still incremental.
-const PW: usize = HIDDEN / 2; // 512
+// Head per output bucket: pairwise CReLU -> L1 (i8) -> SCReLU -> L2 (f32) -> SCReLU -> L3 (f32).
+const PW: usize = HIDDEN / 2;
 const L1_OUT: usize = 16;
 const L2_OUT: usize = 32;
-// L1 dequant: pairwise product (<=QA^2) is shifted >>8 to 8-bit, l1w is QB-scaled,
-// so divide the integer L1 sum by (QA^2/256)*QB = QA^2*QB/256.
+// L1 inputs are (QA*QA)>>8 and weights are QB-scaled.
 const L1_DEQUANT: f32 = @as(f32, @floatFromInt(QA * QA * QB)) / 256.0; // 16256.25
 
 var feature_weights: [INPUT][HIDDEN]i16 = undefined;
 var feature_bias: [HIDDEN]i16 = undefined;
-// All layer-stack weights are OUT-major contiguous (bullet `.transpose()` layout):
-// disk[out*in_size + in]. weights[out] = that output neuron's input vector.
-var l1_weights: [OUTPUT_BUCKETS * L1_OUT][2 * PW]i8 = undefined; // i8, in = 1024
-var l1_bias: [OUTPUT_BUCKETS * L1_OUT]f32 = undefined;
+// Layer weights are out-major: weights[out] is that neuron's input vector.
+var l1_weights: [OUTPUT_BUCKETS * L1_OUT][2 * PW]i8 = undefined;
+var l1_bias: [OUTPUT_BUCKETS * L1_OUT]f32 align(64) = undefined;
 var l2_weights: [OUTPUT_BUCKETS * L2_OUT][L1_OUT]f32 = undefined;
-var l2_bias: [OUTPUT_BUCKETS * L2_OUT]f32 = undefined;
-var l3_weights: [OUTPUT_BUCKETS][L2_OUT]f32 = undefined;
+var l2_bias: [OUTPUT_BUCKETS * L2_OUT]f32 align(64) = undefined;
+var l3_weights: [OUTPUT_BUCKETS][L2_OUT]f32 align(64) = undefined;
 var l3_bias: [OUTPUT_BUCKETS]f32 = undefined;
 var net_loaded: bool = false;
 
-/// Size in bytes of the parameter region of a `quantised.bin` for this
-/// architecture (the file itself is padded up to a multiple of 64 bytes).
+/// Parameter bytes in a quantised.bin (the file is padded to a multiple of 64).
 pub const NET_BYTES: usize =
     INPUT * HIDDEN * @sizeOf(i16) // l0w
     + HIDDEN * @sizeOf(i16) // l0b
@@ -85,66 +68,41 @@ pub fn loaded() bool {
     return net_loaded;
 }
 
-// ===========================================================================
-// Feature encoding — bullet `Chess768`, dual perspective.
-//
-//   friendly = (piece_colour == perspective) ? 0 : 1
-//   rel_sq   = (perspective == White) ? sq : sq ^ 56      // flip rank only
-//   index    = friendly*384 + piece_type*64 + rel_sq
-//
-// piece_idx is NeuroSpeed's `Piece` ordinal: WHITE_* = 0..5, BLACK_* = 8..13,
-// so `piece_idx & 7` is the piece type (P,N,B,R,Q,K = 0..5) and `piece_idx < 8`
-// is the colour — identical to bullet's `piece & 7` / `piece & 8`.
-// ===========================================================================
-// Horizontal mirroring (bullet `ChessBucketsMirrored::default()`): each
-// perspective flips the file of every feature square iff that perspective's
-// OWN king stands on files e-h. `mirror` XORs the relative square's low 3 bits
-// (its file), matching bullet's `feat ^ 7`. num_inputs stays 768 (no buckets).
+// Chess768 index: enemy*384 + piece_type*64 + square, square rank-flipped for black and file-flipped if mirrored.
 pub inline fn feature_index(persp_white: bool, piece_idx: usize, sq: u6, mirror: bool, bucket: usize) usize {
     const piece_type: usize = piece_idx & 7;
     const piece_white: bool = piece_idx < 8;
     const friendly: usize = if (piece_white == persp_white) 0 else 384;
-    var rel_sq: usize = if (persp_white) @as(usize, sq) else @as(usize, sq) ^ 56;
+    var rel_sq: usize = if (persp_white) @as(usize, sq) else types.flip_rank(@as(usize, sq));
     if (mirror) rel_sq ^= 7;
     return FT * bucket + friendly + piece_type * 64 + rel_sq;
 }
 
-/// Whether perspective `persp_white`'s own king is on files e-h (→ mirror).
-/// File is invariant under the vertical (rank) perspective flip, so absolute
-/// king file is correct for both perspectives.
+/// True if this perspective's king is on files e-h.
 inline fn king_mirror(board: *const Board, persp_white: bool) bool {
     const kbb = if (persp_white) board.pieces[5] else board.pieces[13];
     return (@as(usize, @ctz(kbb)) & 7) > 3;
 }
 
-/// Input bucket selected by perspective `persp_white`'s own king square, seen
-/// FROM that perspective (vertical rank flip for Black) — the bucket layout is
-/// rank-dependent, so Black must use ksq^56 (file-only buckets masked this bug).
+/// Input bucket from this perspective's king square (rank-flipped for black).
 inline fn king_bucket(board: *const Board, persp_white: bool) usize {
-    // Mirror-only shipping config: the bucket is provably always 0, so skip
-    // the ctz/xor/table load in every apply/refresh. Flipping
-    // NUM_INPUT_BUCKETS back on restores the full computation.
     if (comptime NUM_INPUT_BUCKETS == 1) return 0;
     const kbb = if (persp_white) board.pieces[5] else board.pieces[13];
     const ksq: usize = @ctz(kbb);
-    const rel: usize = if (persp_white) ksq else ksq ^ 56;
+    const rel: usize = if (persp_white) ksq else types.flip_rank(ksq);
     return buckets_expanded[rel];
 }
 
-/// Two perspective accumulators (White = 0, Black = 1), each tagged with the
-/// mirror state it was built under so incremental updates can detect a king
-/// crossing the d/e boundary (which remaps every feature → full refresh).
+/// Accumulators for both perspectives (white = 0, black = 1).
 pub const Accumulator = struct {
     vals: [2][HIDDEN]i16 = undefined,
     mirror: [2]bool = .{ false, false },
     bucket: [2]usize = .{ 0, 0 },
-    // Lazy-update state: computed[ci] = vals[ci] is valid; else it must be
-    // resolved on demand from `delta` + the nearest computed ancestor. `delta`
-    // holds the world-feature change from the PARENT stack level to this one.
+    // If !computed[ci], vals[ci] is stale and gets rebuilt from the parent using delta.
     computed: [2]bool = .{ false, false },
     delta: FeatDelta = .{},
 
-    /// Rebuild both accumulators from scratch off the board bitboards.
+    /// Rebuild both perspectives from scratch.
     pub fn refresh(self: *Accumulator, board: *const Board) void {
         inline for ([_]bool{ true, false }) |persp_white| {
             refresh_one(self, board, persp_white, king_mirror(board, persp_white), king_bucket(board, persp_white));
@@ -152,18 +110,12 @@ pub const Accumulator = struct {
     }
 };
 
-// ===========================================================================
-// Explicit SIMD kernels. Zig 0.16's LLVM disables the loop auto-vectorizer
-// (miscompilation workaround), so every hot loop must carry its own @Vector
-// code. Zen 5 native: 512-bit → VL16=32, VL32=16; baseline x86_64 (SSE2):
-// VL16=8, VL32=4. HIDDEN=640 and 2*PW=1024 are divisible by all of these.
-// All integer kernels are bit-identical to the scalar loops they replace
-// (elementwise wrapping ops; i32 sums cannot overflow, so order is free).
-// ===========================================================================
+// Hot loops use explicit @Vector code since Zig 0.16 disables LLVM's loop auto-vectorizer.
 const VL16: usize = std.simd.suggestVectorLength(i16) orelse 8;
 const VL32: usize = std.simd.suggestVectorLength(i32) orelse 4;
 comptime {
     std.debug.assert(HIDDEN % VL16 == 0);
+    std.debug.assert(PW % VL16 == 0);
     std.debug.assert((2 * PW) % (2 * VL32) == 0);
 }
 
@@ -171,10 +123,9 @@ const builtin = @import("builtin");
 const HAS_VNNI512 = builtin.cpu.arch == .x86_64 and
     builtin.cpu.has(.x86, .avx512vnni) and VL32 >= 16;
 
-const N_CHUNKS: usize = 2 * PW / 4; // 256 4-byte activation chunks
+const N_CHUNKS: usize = 2 * PW / 4; // 4-byte activation chunks
 
-/// Sparse L1 weight layout: for chunk c, 64 contiguous bytes hold
-/// out j (0..15) x in k (0..3): sparse[b][c*64 + j*4 + k] = w[out j][c*4 + k].
+/// L1 weights grouped by input chunk: sparse[b][c*64 + j*4 + k] = w[out j][c*4 + k].
 var l1_weights_sparse: [OUTPUT_BUCKETS][N_CHUNKS * 64]i8 align(64) = undefined;
 
 fn build_sparse_l1() void {
@@ -189,15 +140,27 @@ fn build_sparse_l1() void {
     }
 }
 
-/// AVX512-VNNI u8 x i8 dot-accumulate: sum[j] += sum_k(u[4j+k] * w[4j+k]),
-/// products summed in full i32 precision (exact, unlike vpdpbusds/pmaddubsw).
+// l2_weights transposed to in-major so the L2 outputs map to vector lanes.
+var l2_wT: [OUTPUT_BUCKETS][L1_OUT][L2_OUT]f32 align(64) = undefined;
+
+fn build_l2_transposed() void {
+    for (0..OUTPUT_BUCKETS) |b| {
+        for (0..L1_OUT) |k| {
+            for (0..L2_OUT) |m| {
+                l2_wT[b][k][m] = l2_weights[b * L2_OUT + m][k];
+            }
+        }
+    }
+}
+
+/// AVX512-VNNI vpdpbusd: sum[j] += dot(u[4j..4j+4], w[4j..4j+4]), no saturation.
 fn dpbusd512(sum: @Vector(16, i32), u: @Vector(64, u8), w: @Vector(64, i8)) @Vector(16, i32) {
     return @extern(*const fn (@Vector(16, i32), @Vector(16, i32), @Vector(16, i32)) callconv(.c) @Vector(16, i32), .{
         .name = "llvm.x86.avx512.vpdpbusd.512",
     }).*(sum, @bitCast(u), @bitCast(w));
 }
 
-// Lookup: bitmask byte -> up to 8 set-bit positions
+// Bitmask byte -> positions of its set bits.
 const NONZERO_INDICES: [256]@Vector(8, u16) = blk: {
     var res: [256]@Vector(8, u16) = @splat(@splat(0));
     @setEvalBranchQuota(256 * 8 * 2);
@@ -241,21 +204,7 @@ inline fn add_col(v: *[HIDDEN]i16, col: *const [HIDDEN]i16) void {
     }
 }
 
-inline fn sub_col(v: *[HIDDEN]i16, col: *const [HIDDEN]i16) void {
-    var i: usize = 0;
-    while (i < HIDDEN) : (i += VL16) {
-        const a: @Vector(VL16, i16) = v[i..][0..VL16].*;
-        const b: @Vector(VL16, i16) = col[i..][0..VL16].*;
-        v[i..][0..VL16].* = a -% b;
-    }
-}
-
-/// Fused incremental update: dst = src - subs[..] + adds[..] in ONE pass over
-/// the accumulator (no intermediate copy — the copy+in-place-update pattern
-/// costs ~2x the memory traffic). `subs`/`adds` are comptime-length TUPLES of
-/// column pointers so they live in SSA registers — an in-memory pointer array
-/// can alias `dst` as far as LLVM knows, forcing per-chunk pointer reloads.
-/// Bit-identical to sequential sub/add: same elementwise wrapping ops.
+/// dst = src - subs + adds in one pass; tuples keep the column pointers in registers.
 fn apply_fused(
     dst: *[HIDDEN]i16,
     src: *const [HIDDEN]i16,
@@ -271,14 +220,14 @@ fn apply_fused(
     }
 }
 
-/// Rebuild a single perspective's accumulator from scratch under (mirror, bucket).
+/// Rebuild one perspective from scratch.
 fn refresh_one(acc: *Accumulator, board: *const Board, comptime persp_white: bool, m: bool, b: usize) void {
     const ci: usize = if (persp_white) 0 else 1;
     acc.mirror[ci] = m;
     acc.bucket[ci] = b;
     acc.vals[ci] = feature_bias;
-    // White pieces are indices 0..5, black 8..13 (6,7 are gaps).
-    inline for ([_]usize{ 0, 1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13 }) |pc| {
+    // Unused piece ordinals are always empty.
+    inline for (0..types.Board.PieceCount) |pc| {
         var bbv = board.pieces[pc];
         while (bbv != 0) {
             const sq: u6 = @intCast(@ctz(bbv));
@@ -289,30 +238,19 @@ fn refresh_one(acc: *Accumulator, board: *const Board, comptime persp_white: boo
     }
 }
 
-// ===========================================================================
-// Incremental accumulator stack (search path).
-//
-// `acc_stack[acc_sp]` always holds the accumulator pair for the CURRENT board
-// inside a search: make_move_search pushes (fused copy + add/sub of the moved
-// feature columns), unmake_move_search pops. Null moves don't move pieces, so
-// they leave the stack untouched and the top entry stays valid. Chess768 has
-// no king buckets, so add/sub columns always suffice — a full refresh is only
-// ever needed at the search root.
-// ===========================================================================
-const STACK_SIZE: usize = 160; // > MAX_PLY (128) + qsearch margin
+// Search accumulator stack: apply() pushes a level per move, pop_acc() pops it; null moves don't touch it.
+const STACK_SIZE: usize = 160; // MAX_PLY plus qsearch headroom
 
 pub var acc_stack: [STACK_SIZE]Accumulator = undefined;
 pub var acc_sp: usize = 0;
-/// True only between stack_init (search root) and stack_stop. Gates the
-/// make/unmake hooks so datagen / UCI position setup never touch the stack.
+/// True between stack_init and stack_stop, so moves outside search skip the stack.
 pub var acc_active: bool = false;
-/// Debug: refresh-and-compare on every stack eval (CLI arg `verify`).
+/// Check every incremental eval against a full refresh (CLI arg `verify`).
 pub var verify_incremental: bool = false;
 
 /// Begin incremental tracking for a search rooted at `board`.
 pub fn stack_init(board: *const Board) void {
-    // Anchor BOTH nets at the root (the small 128-wide refresh is trivial);
-    // per-node routing may evaluate either net anywhere in the tree.
+    // Refresh both nets, the router can pick either one at any node.
     acc_stack[0].refresh(board);
     acc_stack[0].computed = .{ true, true };
     acc_stack_s[0].refresh(board);
@@ -329,9 +267,7 @@ pub inline fn pop_acc() void {
     acc_sp -= 1;
 }
 
-/// A move's feature changes as "world features" (piece, square) pairs — at most
-/// 2 added and 2 subtracted (castling). Each perspective maps them with its own
-/// mirror. move.zig builds this; nnue.apply consumes it.
+/// Piece/square changes of a move, at most 2 adds and 2 subs (castling).
 pub const FeatDelta = struct {
     add_pc: [2]usize = undefined,
     add_sq: [2]u6 = undefined,
@@ -352,20 +288,8 @@ pub const FeatDelta = struct {
     }
 };
 
-/// Lazy push: record the next stack level's `delta` and resolve its mirror/
-/// bucket, but DEFER the actual accumulator arithmetic — `board` is the
-/// POST-move position. A perspective is computed on demand in ensure_computed()
-/// (many nodes are cut before eval and never need it). EXCEPTION: if a
-/// perspective's king crossed the d/e boundary (mirror/bucket changed) it needs
-/// a full refresh, which requires THIS node's board, so it is done eagerly now
-/// and becomes a computed anchor for descendants. At most one perspective can
-/// refresh per move (only one piece moves).
+/// Push a level for the post-move `board`; the update is deferred to eval time unless a king crosses the mirror line.
 pub fn apply(board: *const Board, delta: FeatDelta) void {
-    // PER-NODE dual-net (SF style): record the delta into BOTH nets' lazy
-    // stacks — this is only stores; the accumulator arithmetic stays deferred,
-    // so only the net actually evaluated at a node resolves its column adds
-    // (ensure_computed / ensure_computed_s). Refreshes (king crossing the
-    // mirror boundary) stay eager and anchor both nets; they are rare.
     const srcb = &acc_stack[acc_sp];
     acc_sp += 1;
     const dstb = &acc_stack[acc_sp];
@@ -377,16 +301,15 @@ pub fn apply(board: *const Board, delta: FeatDelta) void {
         const ci: usize = if (pw) 0 else 1;
         const m = king_mirror(board, pw);
         const b = king_bucket(board, pw);
-        // Bucket comparison comptime-folds away in the 1-bucket config.
         const bucket_changed = NUM_INPUT_BUCKETS > 1 and b != srcb.bucket[ci];
         if (m != srcb.mirror[ci] or bucket_changed) {
-            // Refresh boundary — must compute now (needs this board). Anchor.
+            // Mirror changed: refresh now while we have the board.
             refresh_one(dstb, board, pw, m, b);
             dstb.computed[ci] = true;
             refresh_one_s(dsts, board, pw, m, b);
             dsts.computed[ci] = true;
         } else {
-            // Incremental — defer. mirror/bucket carry over from the parent.
+            // Deferred until ensure_computed.
             dstb.mirror[ci] = m;
             dstb.bucket[ci] = b;
             dstb.computed[ci] = false;
@@ -397,8 +320,7 @@ pub fn apply(board: *const Board, delta: FeatDelta) void {
     }
 }
 
-/// Apply one perspective's deferred delta: dst = src − subs[] + adds[], with the
-/// columns resolved under (m, b). Bit-identical to the old eager path.
+/// dst = src - subs + adds for one perspective.
 fn apply_delta_one(
     dst: *[HIDDEN]i16,
     src: *const [HIDDEN]i16,
@@ -434,10 +356,7 @@ fn apply_delta_one(
     }
 }
 
-/// Resolve perspective `ci` of stack level `sp` on demand: walk up to the
-/// nearest computed ancestor, then replay each deferred delta forward,
-/// memoizing every intermediate level so later evals are O(1). The root and
-/// every refresh are computed anchors, so the search always terminates.
+/// Bring level `sp` up to date by replaying deltas from the nearest computed level.
 fn ensure_computed(sp: usize, comptime ci: usize) void {
     if (acc_stack[sp].computed[ci]) return;
     var anchor = sp;
@@ -451,14 +370,10 @@ fn ensure_computed(sp: usize, comptime ci: usize) void {
     }
 }
 
-/// 50-move-rule eval damping divisor (0 = off). Scales the eval toward 0 as the
-/// halfmove clock approaches the draw, info the net itself can't see. Tunable
-/// via the `r50_div` UCI option (SPSA). Default off so bench/datagen are
-/// unchanged unless explicitly enabled.
+/// Scale eval toward 0 as the halfmove clock grows (0 = off).
 pub var r50_div: i32 = 0;
 
-/// Evaluation entry for the search path: uses the incremental stack top when
-/// active, else falls back to a full refresh (UCI `eval`, evalspeed, datagen).
+/// Eval for search: uses the accumulator stack when active, otherwise a full refresh.
 pub fn evaluate_search(board: *const Board) i32 {
     var s: i32 = undefined;
     if (acc_active) {
@@ -467,9 +382,7 @@ pub fn evaluate_search(board: *const Board) i32 {
             ensure_computed_s(acc_sp, 1);
             if (verify_incremental) verify_stack_top_s(board);
             s = evaluate_acc_s(&acc_stack_s[acc_sp], board.side, output_bucket(board));
-            // SF-style guard: material is lopsided but the eval is modest =
-            // compensation (sacrifice) — the decided-specialized small net is
-            // blind there, so re-evaluate with the big net. Rare, cheap insurance.
+            // Small net misjudges sacrifices, so re-check modest scores with the big net.
             if (small_guard > 0 and s < small_guard and s > -small_guard) {
                 ensure_computed(acc_sp, 0);
                 ensure_computed(acc_sp, 1);
@@ -477,7 +390,6 @@ pub fn evaluate_search(board: *const Board) i32 {
                 s = evaluate_acc(&acc_stack[acc_sp], board.side, output_bucket(board));
             }
         } else {
-            // Resolve any deferred accumulator work for the current top before use.
             ensure_computed(acc_sp, 0);
             ensure_computed(acc_sp, 1);
             if (verify_incremental) verify_stack_top(board);
@@ -493,7 +405,7 @@ pub fn evaluate_search(board: *const Board) i32 {
     return s;
 }
 
-/// Debug-only: rebuild from scratch and compare to the incremental stack top.
+/// Panic if the stack top differs from a fresh refresh.
 fn verify_stack_top(board: *const Board) void {
     var fresh: Accumulator = undefined;
     fresh.refresh(board);
@@ -510,9 +422,7 @@ fn verify_stack_top(board: *const Board) void {
     }
 }
 
-/// Small-net counterpart of verify_stack_top: `verify` mode must exercise the
-/// small lazy chain (ensure_computed_s / apply_delta_one_s / refresh_one_s)
-/// too, or a small-path bug ships undetected behind a clean verify run.
+/// verify_stack_top for the small net.
 fn verify_stack_top_s(board: *const Board) void {
     var fresh: AccumulatorS = undefined;
     fresh.refresh(board);
@@ -535,9 +445,7 @@ inline fn screlu(x: i16) i32 {
     return y * y;
 }
 
-/// bullet `MaterialCount<OUTPUT_BUCKETS>`: divisor = ceil(32 / OUTPUT_BUCKETS),
-/// bucket = (piece_count - 2) / divisor. Two kings are always present so the
-/// count is >= 2 and the bucket index stays in [0, OUTPUT_BUCKETS).
+/// Output bucket from piece count (bullet MaterialCount).
 inline fn output_bucket(board: *const Board) usize {
     const divisor: usize = (32 + OUTPUT_BUCKETS - 1) / OUTPUT_BUCKETS;
     const count: usize = @popCount(board.pieces_combined());
@@ -549,13 +457,17 @@ inline fn screlu_f(x: f32) f32 {
     return c * c;
 }
 
-/// L1 dot: u8 (pairwise activations, 0..254) x i8 (weights), explicit vectors
-/// (0.16 has no loop auto-vec). Products fit i16 exactly (max 254*127 = 32258),
-/// adjacent pairs widen to i32 (the vpmaddwd/vpdpwssd idiom); per-lane sums stay
-/// far below 2^31, so lane reassociation is bit-identical to the scalar sum.
+// screlu_f for vectors.
+inline fn screlu_v(x: anytype) @TypeOf(x) {
+    const V = @TypeOf(x);
+    const c = std.math.clamp(x, @as(V, @splat(0.0)), @as(V, @splat(1.0)));
+    return c * c;
+}
+
+/// u8 x i8 dot product for L1; sums fit i32, so the result is exact.
 fn dot_u8i8(x: *const [2 * PW]u8, w: *const [2 * PW]i8) i32 {
     const N = 2 * VL32; // elements per vector step
-    const U = 4; // independent accumulator chains (hide vpdpwssd latency)
+    const U = 4; // independent accumulators to hide latency
     comptime std.debug.assert((2 * PW) % (U * N) == 0);
     var accs: [U]@Vector(VL32, i32) = undefined;
     inline for (0..U) |u| accs[u] = @splat(0);
@@ -564,11 +476,9 @@ fn dot_u8i8(x: *const [2 * PW]u8, w: *const [2 * PW]i8) i32 {
         inline for (0..U) |u| {
             const xv: @Vector(N, u8) = x[j + u * N ..][0..N].*;
             const wv: @Vector(N, i8) = w[j + u * N ..][0..N].*;
-            // Widen -> i32 multiply -> add even/odd lanes: LLVM's canonical
-            // PMADDWD shape (combineToPMADDWD), fusing mul+pairwise-add into
-            // one vpmaddwd/vpdpwssd instead of vpmullw + shuffles.
-            const xi: @Vector(N, i32) = @intCast(xv); // zext, <= 16 bits used
-            const wi: @Vector(N, i32) = @intCast(wv); // sext, <= 16 bits used
+            // Widen, multiply, add pairs: LLVM turns this into vpmaddwd.
+            const xi: @Vector(N, i32) = @intCast(xv);
+            const wi: @Vector(N, i32) = @intCast(wv);
             const prod = xi * wi;
             const halves = std.simd.deinterlace(2, prod);
             accs[u] += halves[0] + halves[1];
@@ -579,14 +489,15 @@ fn dot_u8i8(x: *const [2 * PW]u8, w: *const [2 * PW]i8) i32 {
     return @reduce(.Add, acc);
 }
 
-/// Multilayer forward pass. stm-relative centipawns.
+/// Big-net forward pass, centipawns from the side to move.
 pub fn evaluate_acc(acc: *const Accumulator, stm: Color, bucket: usize) i32 {
     const us: usize = @intFromEnum(stm);
     const them: usize = us ^ 1;
 
-    // CReLU + pairwise-mul to 8-bit: x8[j] = (clamp(acc[j])*clamp(acc[j+PW]))>>8.
+    // Pairwise CReLU: x8[j] = (clamp(acc[j]) * clamp(acc[j + PW])) >> 8.
     var x8: [2 * PW]u8 align(64) = undefined;
-    const PVL = 16;
+    // 255*255 fits u16.
+    const PVL = VL16;
     const z: @Vector(PVL, i16) = @splat(0);
     const q: @Vector(PVL, i16) = @splat(@as(i16, QA));
     inline for ([_]usize{ 0, 1 }) |side| {
@@ -596,19 +507,18 @@ pub fn evaluate_acc(acc: *const Accumulator, stm: Color, bucket: usize) i32 {
         while (j < PW) : (j += PVL) {
             const lo: @Vector(PVL, i16) = av[j..][0..PVL].*;
             const hi: @Vector(PVL, i16) = av[j + PW ..][0..PVL].*;
-            const lc: @Vector(PVL, i32) = @min(@max(lo, z), q);
-            const hc: @Vector(PVL, i32) = @min(@max(hi, z), q);
-            const p: @Vector(PVL, i32) = (lc * hc) >> @splat(8);
-            x8[base + j ..][0..PVL].* = @as(@Vector(PVL, u8), @intCast(p));
+            const lc: @Vector(PVL, u16) = @min(@max(lo, z), q);
+            const hc: @Vector(PVL, u16) = @min(@max(hi, z), q);
+            const p: @Vector(PVL, u16) = (lc *% hc) >> @splat(8);
+            x8[base + j ..][0..PVL].* = @as(@Vector(PVL, u8), @truncate(p));
         }
     }
 
     // L1 (i8) -> dequant + bias -> SCReLU (16).
-    var h2: [L1_OUT]f32 = undefined;
+    var sums: [L1_OUT]i32 = undefined;
     const l1b = bucket * L1_OUT;
     if (comptime HAS_VNNI512) {
-        // Sparse path: one vpdpbusd per nonzero activation chunk computes all
-        // 16 outputs; two accumulator chains hide the dpbusd latency.
+        // Sparse L1: one vpdpbusd per nonzero chunk, two accumulators to hide latency.
         var idxs: [N_CHUNKS]u16 = undefined;
         const nnz = find_nonzero_chunks(&x8, &idxs);
         const x32: [*]const i32 = @ptrCast(@alignCast(&x8));
@@ -626,43 +536,33 @@ pub fn evaluate_acc(acc: *const Accumulator, stm: Color, bucket: usize) i32 {
             const c0: usize = idxs[t];
             acc0 = dpbusd512(acc0, @bitCast(@as(@Vector(16, i32), @splat(x32[c0]))), wsp[c0 * 64 ..][0..64].*);
         }
-        const sums: [L1_OUT]i32 = acc0 + acc1;
-        for (0..L1_OUT) |k| {
-            h2[k] = screlu_f(@as(f32, @floatFromInt(sums[k])) / L1_DEQUANT + l1_bias[l1b + k]);
-        }
+        sums = acc0 + acc1;
     } else {
-        for (0..L1_OUT) |k| {
-            const s = dot_u8i8(&x8, &l1_weights[l1b + k]);
-            h2[k] = screlu_f(@as(f32, @floatFromInt(s)) / L1_DEQUANT + l1_bias[l1b + k]);
-        }
+        for (0..L1_OUT) |k| sums[k] = dot_u8i8(&x8, &l1_weights[l1b + k]);
     }
-    // L2 (f32) -> SCReLU (32).
-    var h3: [L2_OUT]f32 = undefined;
-    const l2b = bucket * L2_OUT;
-    for (0..L2_OUT) |m| {
-        const wrow = &l2_weights[l2b + m];
-        var t: f32 = l2_bias[l2b + m];
-        for (0..L1_OUT) |k| t += wrow[k] * h2[k];
-        h3[m] = screlu_f(t);
-    }
-    // L3 (f32) -> scalar -> cp.
+    // Dequant, add bias, SCReLU.
+    const V1 = @Vector(L1_OUT, f32);
+    const l1_out = @as(V1, @floatFromInt(@as(@Vector(L1_OUT, i32), sums))) / @as(V1, @splat(L1_DEQUANT)) + @as(V1, l1_bias[l1b..][0..L1_OUT].*);
+    const h2: [L1_OUT]f32 = screlu_v(l1_out);
+    // L2 (f32), one lane per output.
+    const V2 = @Vector(L2_OUT, f32);
+    const wT = &l2_wT[bucket];
+    var l2_sum: V2 = l2_bias[bucket * L2_OUT ..][0..L2_OUT].*;
+    inline for (0..L1_OUT) |k| l2_sum += @as(V2, wT[k]) * @as(V2, @splat(h2[k]));
+    // L3 (f32) -> cp.
+    const l3_prod: [L2_OUT]f32 = @as(V2, l3_weights[bucket]) * screlu_v(l2_sum);
     var o: f32 = l3_bias[bucket];
-    for (0..L2_OUT) |m| o += l3_weights[bucket][m] * h3[m];
+    inline for (l3_prod) |x| o += x;
     return @intFromFloat(@round(o * @as(f32, @floatFromInt(SCALE))));
 }
 
 /// Full evaluation of `board` from the side-to-move's perspective.
 pub fn evaluate(board: *const Board) i32 {
-    // Honor the per-node router outside the search stack too (UCI `eval`,
-    // evalspeed): want_small is set by Evaluator.eval from the material signal.
+    // Same net choice and small_guard fallback as evaluate_search.
     if (want_small) {
         var acc_s: AccumulatorS = undefined;
         acc_s.refresh(board);
         const s = evaluate_acc_s(&acc_s, board.side, output_bucket(board));
-        // Mirror evaluate_search's small_guard: without it the display path
-        // (UCI `eval`, evalspeed) reports a different number than the search
-        // uses in guard-band positions (modest small-net score on lopsided
-        // material -> big-net re-eval).
         if (!(small_guard > 0 and s < small_guard and s > -small_guard)) return s;
     }
     var acc: Accumulator = undefined;
@@ -670,30 +570,19 @@ pub fn evaluate(board: *const Board) i32 {
     return evaluate_acc(&acc, board.side, output_bucket(board));
 }
 
-// ===========================================================================
-// Loading a `quantised.bin` (little-endian i16, column-major, no header).
-// ===========================================================================
-inline fn read_i16(data: []const u8, off: usize) i16 {
-    return std.mem.readInt(i16, data[off..][0..2], .little);
-}
-inline fn read_f32(data: []const u8, off: usize) f32 {
-    return @bitCast(std.mem.readInt(u32, data[off..][0..4], .little));
-}
-
-/// Parse multilayer params in bullet save order: l0w(i16) l0b(i16) l1w(i8)
-/// l1b(f32) l2w(f32) l2b(f32) l3w(f32) l3b(f32). All layer weights OUT-major.
+/// Load a big-net quantised.bin: l0w l0b l1w l1b l2w l2b l3w l3b, little-endian, no header.
 pub fn load_bytes(data: []const u8) !void {
     if (data.len < NET_BYTES) return error.NnueNetTooSmall;
 
     var off: usize = 0;
     for (0..INPUT) |f| {
         for (0..HIDDEN) |h| {
-            feature_weights[f][h] = read_i16(data, off);
+            feature_weights[f][h] = util.read_le(i16, data, off);
             off += 2;
         }
     }
     for (0..HIDDEN) |h| {
-        feature_bias[h] = read_i16(data, off);
+        feature_bias[h] = util.read_le(i16, data, off);
         off += 2;
     }
     for (0..OUTPUT_BUCKETS * L1_OUT) |o| {
@@ -704,60 +593,38 @@ pub fn load_bytes(data: []const u8) !void {
     }
     build_sparse_l1();
     for (0..OUTPUT_BUCKETS * L1_OUT) |o| {
-        l1_bias[o] = read_f32(data, off);
+        l1_bias[o] = util.read_le(f32, data, off);
         off += 4;
     }
     for (0..OUTPUT_BUCKETS * L2_OUT) |o| {
         for (0..L1_OUT) |k| {
-            l2_weights[o][k] = read_f32(data, off);
+            l2_weights[o][k] = util.read_le(f32, data, off);
             off += 4;
         }
     }
+    build_l2_transposed();
     for (0..OUTPUT_BUCKETS * L2_OUT) |o| {
-        l2_bias[o] = read_f32(data, off);
+        l2_bias[o] = util.read_le(f32, data, off);
         off += 4;
     }
     for (0..OUTPUT_BUCKETS) |b| {
         for (0..L2_OUT) |m| {
-            l3_weights[b][m] = read_f32(data, off);
+            l3_weights[b][m] = util.read_le(f32, data, off);
             off += 4;
         }
     }
     for (0..OUTPUT_BUCKETS) |b| {
-        l3_bias[b] = read_f32(data, off);
+        l3_bias[b] = util.read_le(f32, data, off);
         off += 4;
     }
 
     net_loaded = true;
 }
 
-/// Load a net from a file on disk (used until the net is `@embedFile`d).
-pub fn load_file(allocator: std.mem.Allocator, path: []const u8) !void {
-    const data = try std.Io.Dir.cwd().readFileAlloc(clock.io, path, allocator, .limited(64 << 20));
-    defer allocator.free(data);
-    try load_bytes(data);
-}
-
-// ===========================================================================
-// SMALL NET (dual-net "decided" tier): an isolated 128-wide multilayer NNUE,
-// decided-specialized (trained on |score|>=300 only). Structurally identical to
-// the big net (768->128 acc -> CReLU+pairwise(128->64/persp) -> concat(128) ->
-// per-bucket L1(128->16 i8) -SCReLU-> L2(16->32) -SCReLU-> L3(32->1)), just
-// narrower and with a plain DENSE L1 (no sparse-VNNI needed at 128-wide). Shares
-// the net-independent feature/mirror/bucket/delta logic. PER-NODE routing (SF
-// style): apply() records deltas into BOTH lazy stacks (stores only); at each
-// eval, `want_small` (set from the free incremental material signal) picks the
-// net and only that net's accumulator is resolved. The big-640 path above is
-// byte-for-byte untouched.
-// ===========================================================================
+// Small net: 128 wide, trained only on decided positions (|score| >= 300).
 const HIDDEN_S: usize = 128;
-const PW_S: usize = HIDDEN_S / 2; // 64
-/// Which architecture the embedded small net uses. `.multilayer` = ml128d
-/// (multilayer head, same shape as the big net). `.single` = sl128d (bullet
-/// single-layer: SCReLU(acc) -> concat -> per-bucket linear, no L2/L3 = the
-/// fastest head). Both share the SAME 128-wide accumulator machinery below;
-/// only the loader and the forward pass differ. Swap src/small_nnuev3.bin to the
-/// matching checkpoint when flipping this.
+const PW_S: usize = HIDDEN_S / 2;
+/// Small-net head: .multilayer (like the big net) or .single (one linear layer); must match the embedded file.
 const SMALL_ARCH: enum { multilayer, single } = .single;
 comptime {
     std.debug.assert(HIDDEN_S % VL16 == 0);
@@ -767,7 +634,7 @@ comptime {
 
 var fw_s: [INPUT][HIDDEN_S]i16 = undefined; // l0w
 var fb_s: [HIDDEN_S]i16 = undefined; // l0b
-var l1w_s: [OUTPUT_BUCKETS * L1_OUT][2 * PW_S]i8 = undefined; // in = 128
+var l1w_s: [OUTPUT_BUCKETS * L1_OUT][2 * PW_S]i8 = undefined;
 var l1b_s: [OUTPUT_BUCKETS * L1_OUT]f32 = undefined;
 var l2w_s: [OUTPUT_BUCKETS * L2_OUT][L1_OUT]f32 = undefined;
 var l2b_s: [OUTPUT_BUCKETS * L2_OUT]f32 = undefined;
@@ -780,59 +647,58 @@ const NET_BYTES_S: usize =
     L1_OUT * (OUTPUT_BUCKETS * L2_OUT) * @sizeOf(f32) + (OUTPUT_BUCKETS * L2_OUT) * @sizeOf(f32) +
     L2_OUT * OUTPUT_BUCKETS * @sizeOf(f32) + OUTPUT_BUCKETS * @sizeOf(f32);
 
-// --- Single-layer small-net head (SMALL_ARCH == .single): per-bucket linear
-// over SCReLU(acc) concat, bullet 4-tensor save format (all i16):
-//   l0w (QA) -> fw_s, l0b (QA) -> fb_s,
-//   l1w (QB, .transpose() = OUT-major disk[out*256 + in]) -> l1w_sl,
-//   l1b (QA*QB) -> l1b_sl.
-var l1w_sl: [OUTPUT_BUCKETS][2 * HIDDEN_S]i16 = undefined;
+// Single-layer head (all i16): l1w is out-major and QB-scaled, l1b is QA*QB-scaled.
+var l1w_sl: [OUTPUT_BUCKETS][2 * HIDDEN_S]i16 align(64) = undefined;
 var l1b_sl: [OUTPUT_BUCKETS]i16 = undefined;
+// True if every l1w_sl weight is in [-128, 128], required by head_sum_simd_s.
+pub var small_head_simd: bool = false;
 
 const NET_BYTES_SL: usize =
     INPUT * HIDDEN_S * @sizeOf(i16) + HIDDEN_S * @sizeOf(i16) +
     OUTPUT_BUCKETS * (2 * HIDDEN_S) * @sizeOf(i16) + OUTPUT_BUCKETS * @sizeOf(i16); // 200976
 
 fn load_bytes_small_single(data: []const u8) !void {
-    // Exact size (allowing bullet's up-to-63-byte alignment pad): a multilayer
-    // checkpoint (NET_BYTES_S = 232224) would pass a bare lower-bound check and
-    // load silently as garbage after a SMALL_ARCH flip without a file swap.
+    // Exact size check (plus up to 63 bytes padding) so a multilayer file is rejected.
     if (data.len < NET_BYTES_SL or data.len > NET_BYTES_SL + 63) return error.NnueNetSizeMismatch;
     var off: usize = 0;
     for (0..INPUT) |f| {
         for (0..HIDDEN_S) |h| {
-            fw_s[f][h] = read_i16(data, off);
+            fw_s[f][h] = util.read_le(i16, data, off);
             off += 2;
         }
     }
     for (0..HIDDEN_S) |h| {
-        fb_s[h] = read_i16(data, off);
+        fb_s[h] = util.read_le(i16, data, off);
         off += 2;
     }
     for (0..OUTPUT_BUCKETS) |o| {
         for (0..2 * HIDDEN_S) |j| {
-            l1w_sl[o][j] = read_i16(data, off);
+            l1w_sl[o][j] = util.read_le(i16, data, off);
             off += 2;
         }
     }
+    // clamp(v)*w must fit i16: 255*128 does, 255*129 doesn't.
+    small_head_simd = for (&l1w_sl) |*row| {
+        if (std.mem.min(i16, row) < -128 or std.mem.max(i16, row) > 128) break false;
+    } else true;
     for (0..OUTPUT_BUCKETS) |o| {
-        l1b_sl[o] = read_i16(data, off);
+        l1b_sl[o] = util.read_le(i16, data, off);
         off += 2;
     }
 }
 
 fn load_bytes_small(data: []const u8) !void {
-    // Exact size (allowing bullet's up-to-63-byte pad) — see the single-layer
-    // loader: rejects an arch-mismatched small net file instead of misparsing it.
+    // Exact size check, see load_bytes_small_single.
     if (data.len < NET_BYTES_S or data.len > NET_BYTES_S + 63) return error.NnueNetSizeMismatch;
     var off: usize = 0;
     for (0..INPUT) |f| {
         for (0..HIDDEN_S) |h| {
-            fw_s[f][h] = read_i16(data, off);
+            fw_s[f][h] = util.read_le(i16, data, off);
             off += 2;
         }
     }
     for (0..HIDDEN_S) |h| {
-        fb_s[h] = read_i16(data, off);
+        fb_s[h] = util.read_le(i16, data, off);
         off += 2;
     }
     for (0..OUTPUT_BUCKETS * L1_OUT) |o| {
@@ -842,27 +708,27 @@ fn load_bytes_small(data: []const u8) !void {
         }
     }
     for (0..OUTPUT_BUCKETS * L1_OUT) |o| {
-        l1b_s[o] = read_f32(data, off);
+        l1b_s[o] = util.read_le(f32, data, off);
         off += 4;
     }
     for (0..OUTPUT_BUCKETS * L2_OUT) |o| {
         for (0..L1_OUT) |k| {
-            l2w_s[o][k] = read_f32(data, off);
+            l2w_s[o][k] = util.read_le(f32, data, off);
             off += 4;
         }
     }
     for (0..OUTPUT_BUCKETS * L2_OUT) |o| {
-        l2b_s[o] = read_f32(data, off);
+        l2b_s[o] = util.read_le(f32, data, off);
         off += 4;
     }
     for (0..OUTPUT_BUCKETS) |b| {
         for (0..L2_OUT) |m| {
-            l3w_s[b][m] = read_f32(data, off);
+            l3w_s[b][m] = util.read_le(f32, data, off);
             off += 4;
         }
     }
     for (0..OUTPUT_BUCKETS) |b| {
-        l3b_s[b] = read_f32(data, off);
+        l3b_s[b] = util.read_le(f32, data, off);
         off += 4;
     }
 }
@@ -903,7 +769,8 @@ fn refresh_one_s(acc: *AccumulatorS, board: *const Board, comptime persp_white: 
     acc.mirror[ci] = m;
     acc.bucket[ci] = b;
     acc.vals[ci] = fb_s;
-    inline for ([_]usize{ 0, 1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13 }) |pc| {
+    // Unused piece ordinals are always empty.
+    inline for (0..types.Board.PieceCount) |pc| {
         var bbv = board.pieces[pc];
         while (bbv != 0) {
             const sq: u6 = @intCast(@ctz(bbv));
@@ -942,8 +809,7 @@ fn ensure_computed_s(sp: usize, comptime ci: usize) void {
     }
 }
 
-/// Dense u8 x i8 dot over the 128-lane small-net activation (exact i32 sum, same
-/// PMADDWD widen idiom as the big net's dot_u8i8 → identical integer result).
+/// Dense u8 x i8 dot product for the small net's L1.
 fn dot_u8i8_s(x: *const [2 * PW_S]u8, w: *const [2 * PW_S]i8) i32 {
     const N = 2 * VL32;
     var acc: @Vector(VL32, i32) = @splat(0);
@@ -960,10 +826,7 @@ fn dot_u8i8_s(x: *const [2 * PW_S]u8, w: *const [2 * PW_S]i8) i32 {
     return @reduce(.Add, acc);
 }
 
-/// Small-net multilayer forward pass. stm-relative centipawns. Mirrors
-/// evaluate_acc exactly at HIDDEN_S=128 (dense L1); same quant/dequant/order so
-/// forcing the router to always-small reproduces the standalone 128 net bit-for-bit.
-/// Small-net forward pass, dispatched on SMALL_ARCH at comptime.
+/// Small-net forward pass, centipawns from the side to move.
 pub fn evaluate_acc_s(acc: *const AccumulatorS, stm: Color, bucket: usize) i32 {
     return if (comptime SMALL_ARCH == .multilayer)
         evaluate_acc_s_ml(acc, stm, bucket)
@@ -971,17 +834,20 @@ pub fn evaluate_acc_s(acc: *const AccumulatorS, stm: Color, bucket: usize) i32 {
         evaluate_acc_s_single(acc, stm, bucket);
 }
 
-/// Single-layer forward pass (bullet standard): raw = SCReLU(acc_us)·w_us +
-/// SCReLU(acc_them)·w_them, cp = (raw/QA + l1b)*SCALE/(QA*QB). i64 accumulation:
-/// screlu <= QA^2 = 65025 times an i16 weight exceeds i32 per term. Integer
-/// divisions are @divTrunc to match bullet's Rust `/` on integers exactly.
+/// cp = (sum(SCReLU(acc) * w) / QA + bias) * SCALE / (QA*QB), truncating like bullet.
 fn evaluate_acc_s_single(acc: *const AccumulatorS, stm: Color, bucket: usize) i32 {
     const us: usize = @intFromEnum(stm);
-    const them: usize = us ^ 1;
     const w = &l1w_sl[bucket];
+    const sum = if (small_head_simd) head_sum_simd_s(acc, us, w) else head_sum_scalar_s(acc, us, w);
+    var out: i64 = @divTrunc(sum, QA64) + l1b_sl[bucket];
+    out = @divTrunc(out * SCALE64, QA64 * QB64);
+    return @intCast(out);
+}
+
+// Scalar head sum in i64, exact for any i16 weight.
+fn head_sum_scalar_s(acc: *const AccumulatorS, us: usize, w: *const [2 * HIDDEN_S]i16) i64 {
+    const them: usize = us ^ 1;
     var sum: i64 = 0;
-    // 4-way unroll; scalar i64 madds (the head is 256 madds total — the
-    // accumulator update dominates; vectorize only if evalspeed disappoints).
     inline for ([_]usize{ 0, 1 }) |side| {
         const av = if (side == 0) &acc.vals[us] else &acc.vals[them];
         const base = side * HIDDEN_S;
@@ -993,9 +859,29 @@ fn evaluate_acc_s_single(acc: *const AccumulatorS, stm: Color, bucket: usize) i3
             sum += @as(i64, screlu(av[i + 3])) * w[base + i + 3];
         }
     }
-    var out: i64 = @divTrunc(sum, QA64) + l1b_sl[bucket];
-    out = @divTrunc(out * SCALE64, QA64 * QB64);
-    return @intCast(out);
+    return sum;
+}
+
+// SIMD head sum, only valid when small_head_simd: (clamp(v)*w) in i16, then *v in i32.
+inline fn head_sum_simd_s(acc: *const AccumulatorS, us: usize, w: *const [2 * HIDDEN_S]i16) i64 {
+    const them: usize = us ^ 1;
+    const z: @Vector(VL16, i16) = @splat(0);
+    const q: @Vector(VL16, i16) = @splat(@as(i16, QA));
+    var s: @Vector(VL16 / 2, i32) = @splat(0);
+    inline for ([_]usize{ 0, 1 }) |side| {
+        const av = if (side == 0) &acc.vals[us] else &acc.vals[them];
+        const base = side * HIDDEN_S;
+        var i: usize = 0;
+        while (i < HIDDEN_S) : (i += VL16) {
+            const v: @Vector(VL16, i16) = @min(@max(@as(@Vector(VL16, i16), av[i..][0..VL16].*), z), q);
+            const wv: @Vector(VL16, i16) = w[base + i ..][0..VL16].*;
+            const prod = @as(@Vector(VL16, i32), v *% wv) * @as(@Vector(VL16, i32), v);
+            const halves = std.simd.deinterlace(2, prod);
+            s += halves[0] + halves[1];
+        }
+    }
+    // |sum| <= 256*255*255*128 < 2^31, so i32 can't overflow.
+    return @reduce(.Add, s);
 }
 
 fn evaluate_acc_s_ml(acc: *const AccumulatorS, stm: Color, bucket: usize) i32 {
@@ -1037,46 +923,21 @@ fn evaluate_acc_s_ml(acc: *const AccumulatorS, stm: Color, bucket: usize) i32 {
     return @intFromFloat(@round(o * @as(f32, @floatFromInt(SCALE))));
 }
 
-// --- Per-NODE net router (SF style). The selection signal is the FREE
-// incrementally-maintained material balance (evaluation.zig material_mg, kept
-// current at every make/unmake): Evaluator.eval sets `want_small` before each
-// evaluate_search call. Lopsided material (|mat| > small_thresh) -> small net;
-// else big net. small_guard: if the small net returns a modest score despite
-// lopsided material (= compensation/sacrifice, which the decided-specialized
-// net never learned), re-evaluate with the big net.
-// Force modes for validation: small_thresh=30000 -> pure big (bench identity
-// 65464); small_thresh=-1 + small_guard=0 -> pure small (bench identity 54171).
-pub var small_thresh: i32 = 475; // cp of material_mg scale (~minor piece)
-pub var small_guard: i32 = 248; // re-eval band; 0 = off
+// Small-net scores inside (-small_guard, small_guard) get re-evaluated by the big net (0 = off).
+pub var small_guard: i32 = 248;
+// Set by router.zig before each eval to pick the small net.
 pub var want_small: bool = false;
-/// Third tier ("sudden death"): |material| above this -> HCE, the fastest eval
-/// (~10x, lazy alpha/beta cutoffs). In dead-won positions eval precision is
-/// irrelevant — only NPS converts, exactly the bullet time-scramble case.
-/// Tier ladder (Evaluator.eval): |mat| > hce_thresh -> HCE, > small_thresh ->
-/// small NNUE, else big NNUE. 30000 disables the tier (SF12-15 shipped this
-/// exact hybrid: classical eval when material very lopsided, NNUE otherwise).
-pub var hce_thresh: i32 = 895;
-// Stage 3 (Hybrid-v2): scale the router thresholds by game phase. 100 = off
-// (bit-identical). Below 100: full board keeps thresholds, and as material
-// comes off they shrink linearly toward phase_floor_pct% — the fast tiers are
-// safest in simplified, conversion-dominated endgames. Clamped [30, 100].
-pub var phase_floor_pct: i32 = 100;
-// Stage 4 (Hybrid-v2): HCE conversion scalars, percent (100 = neutral,
-// bit-identical). Scale the "win a won position" machinery inside hce_eval /
-// evaluate_special_endgames; SPSA-tunable at bullet TC.
-pub var hce_corner_pct: i32 = 100; // corner-driving bonus (B+N mate corners)
-pub var hce_kingdist_pct: i32 = 100; // king-proximity term in won endgames
-pub var hce_edge_pct: i32 = 100; // CENTER_CONTROL edge-driving term
-pub var hce_tempo_pct: i32 = 100; // both tempo bonuses (mg/eg interpolated)
-pub var hce_lazy_margin: i32 = 600; // replaces the LAZY_MARGIN const
 
-// The trained Gen-0 net, embedded for a dependency-free release build.
-// Resolved via the anonymous imports registered in build.zig — the actual
-// files are nets/big_nnuev3.bin and nets/small_nnuev3.bin at the repo root.
+pub const options = [_]types.Option{
+    .{ .name = "r50_div", .ptr = &r50_div, .min = 0, .max = 1024 },
+    .{ .name = "small_guard", .ptr = &small_guard, .min = 0, .max = 2000 },
+};
+
+// Embedded nets, see the imports in build.zig (nets/big_nnuev3.bin, nets/small_nnuev3.bin).
 const embedded_net = @embedFile("big_nnuev3");
 const embedded_net_small = @embedFile("small_nnuev3");
 
-/// Load the embedded nets into the module-level parameters and mark ready.
+/// Load the embedded nets.
 pub fn load_embedded() !void {
     try load_bytes(embedded_net);
     if (comptime SMALL_ARCH == .multilayer) {

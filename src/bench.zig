@@ -2,6 +2,7 @@ const std = @import("std");
 const types = @import("types.zig");
 const bitboard = @import("bitboard.zig");
 const search = @import("search.zig");
+const tt_mod = @import("tt.zig");
 const util = @import("util.zig");
 const eval = @import("evaluation.zig");
 const clock = @import("clock.zig");
@@ -36,21 +37,15 @@ pub fn run_nodes(board: *types.Board, count: usize, depth: u8) u64 {
         bitboard.parse_fen(fen, board) catch continue;
 
         search.init_search();
-        if (search.global_tt) |*tt| tt.clear();
+        if (tt_mod.global) |*tt| tt.clear();
 
-        if (board.side == types.Color.White) {
-            search.search_position(board, depth, 0, 0, types.Color.White);
-        } else {
-            search.search_position(board, depth, 0, 0, types.Color.Black);
-        }
+        search.search_position_rt(board, depth, 0, 0);
         total += search.global_search.nodes;
     }
     return total;
 }
 
-/// Timed fingerprint bench: prints "<nodes> nodes <nps> nps". Bare UCI
-/// `bench` uses (5, 11) — 311432 nodes for the champion config; `bench
-/// <depth>` uses the full 20 positions (`bench 6` = 56024).
+/// Search the first `count` positions to `depth` and print "<nodes> nodes <nps> nps".
 pub fn run(board: *types.Board, count: usize, depth: u8, out: *std.Io.Writer) !void {
     var timer: clock.Timer = .start();
     const total_nodes = run_nodes(board, count, depth);
@@ -59,30 +54,27 @@ pub fn run(board: *types.Board, count: usize, depth: u8, out: *std.Io.Writer) !v
     try out.print("{d} nodes {d} nps\n", .{ total_nodes, nps });
 }
 
-/// One component measurement: node/call count plus elapsed nanoseconds.
+/// Node or call count and elapsed nanoseconds.
 pub const Measure = struct {
     nodes: u64,
     ns: u64,
 
-    /// Millions per second (movegen MN/s, eval M calls/s).
     pub fn mps(m: Measure) f64 {
         return @as(f64, @floatFromInt(m.nodes)) / @as(f64, @floatFromInt(m.ns)) * 1000.0;
     }
 
-    /// Plain per-second rate (search NPS).
     pub fn per_sec(m: Measure) f64 {
         return @as(f64, @floatFromInt(m.nodes)) * std.time.ns_per_s / @as(f64, @floatFromInt(m.ns));
     }
 };
 
-/// Move generator speed on the current position: legal perft to `depth` —
-/// fast play/undo, no zobrist/eval. Backs the UCI `perft` command.
+/// Perft speed on the current position (UCI `perft`).
 pub fn measure_movegen_pos(board: *types.Board, depth: u8) Measure {
     var timer: clock.Timer = .start();
     const nodes: u64 = if (board.side == types.Color.White)
-        util.perft_legal(types.Color.White, board, depth)
+        util.Perft.run(types.Color.White, board, depth, false).nodes
     else
-        util.perft_legal(types.Color.Black, board, depth);
+        util.Perft.run(types.Color.Black, board, depth, false).nodes;
     return .{ .nodes = nodes, .ns = @max(1, timer.read()) };
 }
 
@@ -91,8 +83,7 @@ pub fn measure_movegen(board: *types.Board, fen: []const u8, depth: u8) !Measure
     return measure_movegen_pos(board, depth);
 }
 
-/// Evaluation speed on the current position: `iters` repeated full
-/// static-eval calls (no lazy cutoff). Backs the UCI `evalspeed` command.
+/// Eval speed on the current position.
 pub fn measure_eval_pos(board: *types.Board, iters: u64) Measure {
     const white = board.side == types.Color.White;
     var sink: i64 = 0;
@@ -103,7 +94,7 @@ pub fn measure_eval_pos(board: *types.Board, iters: u64) Measure {
             eval.global_evaluator.eval_full(board, types.Color.White)
         else
             eval.global_evaluator.eval_full(board, types.Color.Black);
-        sink +%= s; // keep the optimizer from deleting the eval call
+        sink +%= s; // keep the eval call from being optimized out
     }
     const ns = @max(1, timer.read());
     std.mem.doNotOptimizeAway(sink);
@@ -115,25 +106,18 @@ pub fn measure_eval(board: *types.Board, fen: []const u8, iters: u64) !Measure {
     return measure_eval_pos(board, iters);
 }
 
-/// Full-engine speed: search to `depth` from a clean TT.
+/// Search speed on `fen` to `depth`.
 pub fn measure_search(board: *types.Board, fen: []const u8, depth: u8) !Measure {
     try bitboard.parse_fen(fen, board);
     search.init_search();
-    if (search.global_tt) |*tt| tt.clear();
+    if (tt_mod.global) |*tt| tt.clear();
     var timer: clock.Timer = .start();
-    if (board.side == types.Color.White)
-        search.search_position(board, depth, 0, 0, types.Color.White)
-    else
-        search.search_position(board, depth, 0, 0, types.Color.Black);
+    search.search_position_rt(board, depth, 0, 0);
     const ns = @max(1, timer.read());
     return .{ .nodes = search.global_search.nodes, .ns = ns };
 }
 
-/// Component speed benchmark for the thesis methodology (tab:perft_positions).
-/// Over the six standard PERFT positions, measures all three component speeds:
-///   1. move generator  -> perft to `depth`, pure movegen (no zobrist/eval)
-///   2. evaluation       -> repeated static-eval calls, calls per second
-///   3. full search      -> search to `depth`, nodes per second of the whole engine
+/// Movegen, eval and search speed on the standard perft positions.
 pub fn speedbench(board: *types.Board, depth: u8, out: *std.Io.Writer) !void {
     const eval_iters: u64 = 20_000_000;
 

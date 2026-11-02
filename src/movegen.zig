@@ -3,10 +3,7 @@ const types = @import("types.zig");
 const attacks = @import("attacks.zig");
 const util = @import("util.zig");
 
-/// between_table[sq1][sq2] = bitboard of squares strictly between sq1 and sq2
-/// (excludes both endpoints). Zero if not on same rank/file/diagonal.
-/// Comptime const: lives in rodata, so the optimizer can hoist loads freely
-/// across the stores in the hot movegen loops (a mutable global can alias).
+/// Squares strictly between two aligned squares, 0 if they are not on a line.
 pub const between_table: [64][64]u64 = blk: {
     @setEvalBranchQuota(2_000_000);
     var t: [64][64]u64 = undefined;
@@ -18,27 +15,12 @@ pub const between_table: [64][64]u64 = blk: {
     break :blk t;
 };
 
-/// line_table[sq1][sq2] = bitboard of the full line through sq1 and sq2
-/// (includes both endpoints and extends to board edges).
-/// Zero if not on same rank/file/diagonal.
-pub const line_table: [64][64]u64 = blk: {
-    @setEvalBranchQuota(2_000_000);
-    var t: [64][64]u64 = undefined;
-    for (0..64) |sq1| {
-        for (0..64) |sq2| {
-            t[sq1][sq2] = compute_line(@intCast(sq1), @intCast(sq2));
-        }
-    }
-    break :blk t;
-};
-
-/// Full ray masks for each square (including edges). Used for fast-reject
-/// before doing expensive slider lookups during pin/check detection.
+/// Full rays from each square, used to skip slider lookups early.
 pub const rook_full_mask: [64]u64 = blk: {
     @setEvalBranchQuota(100_000);
     var t: [64]u64 = undefined;
     for (0..64) |sq| {
-        var m = types.mask_rank[sq / 8] | types.mask_file[sq % 8];
+        var m = types.mask_rank[types.rank_of(sq)] | types.mask_file[types.file_of(sq)];
         m &= ~(@as(u64, 1) << @intCast(sq)); // remove the square itself
         t[sq] = m;
     }
@@ -48,8 +30,8 @@ pub const bishop_full_mask: [64]u64 = blk: {
     @setEvalBranchQuota(100_000);
     var t: [64]u64 = undefined;
     for (0..64) |sq| {
-        const rank = sq / 8;
-        const file = sq % 8;
+        const rank = types.rank_of(sq);
+        const file = types.file_of(sq);
         const diag = @as(i8, @intCast(rank)) - @as(i8, @intCast(file)) + 7;
         const adiag = @as(i8, @intCast(rank)) + @as(i8, @intCast(file));
         var m = types.mask_diagonal_nw_se[@intCast(diag)] |
@@ -61,17 +43,17 @@ pub const bishop_full_mask: [64]u64 = blk: {
 };
 
 fn compute_between(sq1: u6, sq2: u6) u64 {
-    const r1: i8 = @intCast(@as(u8, sq1) / 8);
-    const f1: i8 = @intCast(@as(u8, sq1) % 8);
-    const r2: i8 = @intCast(@as(u8, sq2) / 8);
-    const f2: i8 = @intCast(@as(u8, sq2) % 8);
+    const r1: i8 = @intCast(types.rank_of(@as(u8, sq1)));
+    const f1: i8 = @intCast(types.file_of(@as(u8, sq1)));
+    const r2: i8 = @intCast(types.rank_of(@as(u8, sq2)));
+    const f2: i8 = @intCast(types.file_of(@as(u8, sq2)));
 
-    const dr = sign(r2 - r1);
-    const df = sign(f2 - f1);
+    const dr = std.math.sign(r2 - r1);
+    const df = std.math.sign(f2 - f1);
 
     // Must be on same rank, file, or diagonal
     if (dr == 0 and df == 0) return 0; // same square
-    if (dr != 0 and df != 0 and abs_i8(r2 - r1) != abs_i8(f2 - f1)) return 0; // not on diagonal
+    if (dr != 0 and df != 0 and @abs(r2 - r1) != @abs(f2 - f1)) return 0; // not on diagonal
     if (dr == 0 and r1 != r2) return 0;
     if (df == 0 and f1 != f2) return 0;
 
@@ -86,61 +68,22 @@ fn compute_between(sq1: u6, sq2: u6) u64 {
     return result;
 }
 
-fn compute_line(sq1: u6, sq2: u6) u64 {
-    if (sq1 == sq2) return 0;
-
-    const r1: i8 = @intCast(@as(u8, sq1) / 8);
-    const f1: i8 = @intCast(@as(u8, sq1) % 8);
-    const r2: i8 = @intCast(@as(u8, sq2) / 8);
-    const f2: i8 = @intCast(@as(u8, sq2) % 8);
-
-    // Same rank
-    if (r1 == r2) return types.mask_rank[@intCast(r1)];
-    // Same file
-    if (f1 == f2) return types.mask_file[@intCast(f1)];
-    // Diagonal
-    if (abs_i8(r2 - r1) == abs_i8(f2 - f1)) {
-        const diag = r1 - f1 + 7;
-        const adiag = r1 + f1;
-        // Figure out which diagonal they share
-        const d_mask = types.mask_diagonal_nw_se[@intCast(diag)];
-        const ad_mask = types.mask_anti_diagonal_ne_sw[@intCast(adiag)];
-        const sq2_bb = @as(u64, 1) << sq2;
-        if (d_mask & sq2_bb != 0) return d_mask;
-        if (ad_mask & sq2_bb != 0) return ad_mask;
-    }
-    return 0;
-}
-
-fn sign(x: i8) i8 {
-    if (x > 0) return 1;
-    if (x < 0) return -1;
-    return 0;
-}
-
-fn abs_i8(x: i8) i8 {
-    return if (x < 0) -x else x;
-}
-
-// ============================================================================
-// Checkmask and Pinmask Computation
-// ============================================================================
+// Check and pin masks
 
 pub const LegalInfo = struct {
     checkmask: u64,
     pin_hv: u64,
     pin_d12: u64,
     king_ban: u64, // squares attacked by enemy (king cannot go here)
-    us_bb: u64, // our occupancy (cached to avoid recomputing)
-    them_bb: u64, // their occupancy (cached to avoid recomputing)
+    us_bb: u64, // our occupancy
+    them_bb: u64, // their occupancy
     num_checkers: u2, // 0, 1, or 2+
 };
 
-/// Compute all legal move generation info: checkmask, pinmasks, and king danger squares.
-/// This replaces the old make/unmake legality check approach.
+/// Compute the checkmask, pinmasks and the squares the king can't go to.
 pub inline fn compute_legal_info(board: *const types.Board, comptime color: types.Color) LegalInfo {
     const us = color;
-    const them = if (us == types.Color.White) types.Color.Black else types.Color.White;
+    const them = comptime us.other();
 
     const us_bb = board.set_pieces(us);
     const them_bb = board.set_pieces(them);
@@ -167,7 +110,7 @@ pub inline fn compute_legal_info(board: *const types.Board, comptime color: type
     var pin_hv: u64 = 0;
     var pin_d12: u64 = 0;
 
-    // ---- Pawn checks ----
+    // Pawn checks
     const pawn_atk = attacks.pawn_attacks_from_square(king_sq, us);
     const pawn_checkers = pawn_atk & enemy_pawns;
     if (pawn_checkers != 0) {
@@ -175,15 +118,15 @@ pub inline fn compute_legal_info(board: *const types.Board, comptime color: type
         num_checkers += 1;
     }
 
-    // ---- Knight checks ----
+    // Knight checks
     const knight_atk = attacks.piece_attacks(king_sq, 0, types.PieceType.Knight);
     const knight_checkers = knight_atk & enemy_knights;
     if (knight_checkers != 0) {
         checkmask |= knight_checkers;
-        num_checkers +|= 1; // saturating add — if already 1, becomes 2
+        num_checkers +|= 1; // saturates at 2
     }
 
-    // ---- Slider checks and pins (HV) ----
+    // Rook and queen checks and pins
     if (rook_full_mask[king_sq] & enemy_rook_queen != 0) {
         const rook_atk = attacks.get_rook_attacks(king_sq, occ);
         // Direct checks by rook/queen
@@ -197,8 +140,7 @@ pub inline fn compute_legal_info(board: *const types.Board, comptime color: type
             num_checkers +|= 1;
         }
 
-        // X-ray through one blocker for pins
-        // Compute rook attacks through the first blocker(s) to find pinners
+        // X-ray through our pieces to find pinners
         const occ_without_us = occ & ~us_bb; // remove our pieces to see through them
         const xray_atk = attacks.get_rook_attacks(king_sq, occ_without_us);
         // Pinners = enemy rook/queen that are seen through one of our pieces
@@ -208,15 +150,14 @@ pub inline fn compute_legal_info(board: *const types.Board, comptime color: type
             pinners &= pinners - 1;
             // The pin ray includes all squares between king and pinner, plus the pinner
             const pin_ray = between_table[king_sq][pinner_sq] | (@as(u64, 1) << pinner_sq);
-            // Only register as pin if exactly one of our pieces is on the ray.
-            // If 2+ of our pieces are between king and slider, none is truly pinned.
+            // A pin needs exactly one of our pieces on the ray.
             if (@popCount(pin_ray & us_bb) == 1) {
                 pin_hv |= pin_ray;
             }
         }
     }
 
-    // ---- Slider checks and pins (Diagonal) ----
+    // Bishop and queen checks and pins
     if (bishop_full_mask[king_sq] & enemy_bishop_queen != 0) {
         const bishop_atk = attacks.get_bishop_attacks(king_sq, occ);
         // Direct checks
@@ -237,8 +178,7 @@ pub inline fn compute_legal_info(board: *const types.Board, comptime color: type
             const pinner_sq: u6 = @intCast(@ctz(pinners));
             pinners &= pinners - 1;
             const pin_ray = between_table[king_sq][pinner_sq] | (@as(u64, 1) << pinner_sq);
-            // Only register as pin if exactly one of our pieces is on the ray.
-            // If 2+ of our pieces are between king and slider, none is truly pinned.
+            // A pin needs exactly one of our pieces on the ray.
             if (@popCount(pin_ray & us_bb) == 1) {
                 pin_d12 |= pin_ray;
             }
@@ -250,8 +190,7 @@ pub inline fn compute_legal_info(board: *const types.Board, comptime color: type
         checkmask = ~@as(u64, 0);
     }
 
-    // ---- Compute king danger squares (all squares attacked by enemy) ----
-    // We must remove our king from occupancy so that sliders "see through" it
+    // Squares the enemy attacks, with our king removed so sliders see through it
     const occ_no_king = occ ^ king_bb;
     var king_ban: u64 = 0;
 
@@ -309,25 +248,30 @@ pub inline fn compute_legal_info(board: *const types.Board, comptime color: type
     };
 }
 
-// ============================================================================
-// Legal Move Generation (Gigantua-style)
-// ============================================================================
+// Legal move generation
 
 const lists = @import("lists.zig");
 const Move = @import("move.zig").Move;
 
-/// Generate all legal moves for the given color using checkmask + pinmask.
-/// This replaces the old pseudo-legal generate_moves + make/unmake legality check.
+/// Generate all legal moves for `color` using the check and pin masks.
 pub inline fn generate_legal_moves(board: *const types.Board, list: *lists.MoveList, comptime color: types.Color) void {
     const info = compute_legal_info(board, color);
     generate_legal_moves_with_info(board, list, color, info);
 }
 
+/// `generate_legal_moves` for callers that only know the side at runtime.
+pub fn generate_legal_moves_rt(board: *const types.Board, list: *lists.MoveList) void {
+    switch (board.side) {
+        inline .White, .Black => |c| generate_legal_moves(board, list, c),
+        .both => unreachable,
+    }
+}
+
 pub inline fn generate_legal_moves_with_info(board: *const types.Board, list: *lists.MoveList, comptime color: types.Color, info: LegalInfo) void {
     const us = color;
-    const them = if (us == types.Color.White) types.Color.Black else types.Color.White;
+    const them = comptime us.other();
 
-    // Use cached occupancy from compute_legal_info to avoid recomputing 12 ORs
+    // Occupancy from compute_legal_info
     const us_bb = info.us_bb;
     const them_bb = info.them_bb;
     const occ = us_bb | them_bb;
@@ -341,7 +285,7 @@ pub inline fn generate_legal_moves_with_info(board: *const types.Board, list: *l
     const pin_d12 = info.pin_d12;
     const king_ban = info.king_ban;
 
-    // ---- King moves (always generated, regardless of check count) ----
+    // King moves
     {
         const king_atk = attacks.piece_attacks(king_sq, occ, types.PieceType.King);
         // King can go to: attacked squares & not own pieces & not attacked by enemy
@@ -357,7 +301,7 @@ pub inline fn generate_legal_moves_with_info(board: *const types.Board, list: *l
     // In double check, only king moves are legal
     if (info.num_checkers >= 2) return;
 
-    // ---- Castling (only when not in check) ----
+    // Castling, only when not in check
     if (info.num_checkers == 0) {
         if (us == types.Color.White) {
             // White kingside
@@ -396,9 +340,7 @@ pub inline fn generate_legal_moves_with_info(board: *const types.Board, list: *l
         }
     }
 
-    // ---- Pawn moves ----
-    // Lambergar-style: handle non-pinned pawns with simple bulk shifts (common case),
-    // then handle pinned pawns separately (rare, 0-1 per position).
+    // Pawns: non-pinned ones with bulk shifts, pinned ones separately
     {
         const pawn_piece = if (us == types.Color.White) types.Piece.WHITE_PAWN else types.Piece.BLACK_PAWN;
         const our_pawns = board.pieces[@intFromEnum(pawn_piece)];
@@ -410,7 +352,7 @@ pub inline fn generate_legal_moves_with_info(board: *const types.Board, list: *l
         const file_a: u64 = types.mask_file[0];
         const file_h: u64 = types.mask_file[7];
 
-        // ---- Non-pinned pawns: simple bulk shifts, no pin logic ----
+        // Non-pinned pawns
         const free_pawns = our_pawns & ~(pin_hv | pin_d12);
 
         // Single pushes (non-promo)
@@ -493,7 +435,7 @@ pub inline fn generate_legal_moves_with_info(board: *const types.Board, list: *l
             list.append(Move.new(from, to, types.MoveFlags.PC_KNIGHT));
         }
 
-        // ---- HV-pinned pawns: can only push along vertical pin ray ----
+        // Rank/file-pinned pawns can only push along the pin
         {
             const hv_pawns = our_pawns & pin_hv;
             // Push targets must also be on pin_hv (vertically pinned = OK, horizontally = blocked)
@@ -538,7 +480,7 @@ pub inline fn generate_legal_moves_with_info(board: *const types.Board, list: *l
             }
         }
 
-        // ---- D12-pinned pawns: can only capture along diagonal pin ray ----
+        // Diagonally pinned pawns can only capture along the pin
         {
             const d12_pawns = our_pawns & pin_d12;
 
@@ -598,8 +540,7 @@ pub inline fn generate_legal_moves_with_info(board: *const types.Board, list: *l
             const captured_sq: u6 = if (us == types.Color.White) ep_sq - 8 else ep_sq + 8;
             const captured_bb = @as(u64, 1) << captured_sq;
 
-            // EP is special: the captured pawn might be the piece giving check
-            // So checkmask should include the captured pawn square
+            // The captured pawn may be the checker, so its square counts for the checkmask
             const ep_checkmask_ok = (ep_bb & checkmask != 0) or (captured_bb & checkmask != 0);
 
             if (ep_checkmask_ok or info.num_checkers == 0) {
@@ -619,9 +560,7 @@ pub inline fn generate_legal_moves_with_info(board: *const types.Board, list: *l
                     // If the pawn is HV pinned, it can never capture (diagonal move)
                     if (from_bb & pin_hv != 0) continue;
 
-                    // Special horizontal pin check for EP:
-                    // Removing both the capturing pawn and captured pawn from the rank
-                    // might expose the king to a rook/queen on the same rank
+                    // Removing both pawns from the rank can expose the king to a rook or queen
                     const ep_rank = if (us == types.Color.White) types.mask_rank[4] else types.mask_rank[3];
                     if (king_bb & ep_rank != 0) {
                         const enemy_rq = board.pieces[@intFromEnum(if (them == types.Color.White) types.Piece.WHITE_ROOK else types.Piece.BLACK_ROOK)] |
@@ -643,7 +582,7 @@ pub inline fn generate_legal_moves_with_info(board: *const types.Board, list: *l
     const movable = ~us_bb & checkmask;
     const not_pinned = ~(pin_hv | pin_d12);
 
-    // ---- Knight moves (pinned knights can never move) ----
+    // Knight moves, pinned knights can't move
     {
         const knight_piece = if (us == types.Color.White) types.Piece.WHITE_KNIGHT else types.Piece.BLACK_KNIGHT;
         var our_knights = board.pieces[@intFromEnum(knight_piece)] & not_pinned;
@@ -662,15 +601,13 @@ pub inline fn generate_legal_moves_with_info(board: *const types.Board, list: *l
         }
     }
 
-    // ---- Pinned sliders: constrained to pin ray ----
-    // Bishops pinned on HV can't move. Rooks pinned on D12 can't move.
-    // Only process: bishops pinned on D12, rooks pinned on HV, queens on either.
+    // Pinned sliders can only move along their pin ray
     {
         const bishop_piece = if (us == types.Color.White) types.Piece.WHITE_BISHOP else types.Piece.BLACK_BISHOP;
         const rook_piece = if (us == types.Color.White) types.Piece.WHITE_ROOK else types.Piece.BLACK_ROOK;
         const queen_piece = if (us == types.Color.White) types.Piece.WHITE_QUEEN else types.Piece.BLACK_QUEEN;
 
-        // Pinned rooks/queens along HV — constrained to pin_hv
+        // Rooks and queens pinned on a rank or file
         var hv_pinned = (board.pieces[@intFromEnum(rook_piece)] | board.pieces[@intFromEnum(queen_piece)]) & pin_hv;
         while (hv_pinned != 0) {
             const from: u6 = @intCast(@ctz(hv_pinned));
@@ -684,7 +621,7 @@ pub inline fn generate_legal_moves_with_info(board: *const types.Board, list: *l
             }
         }
 
-        // Pinned bishops/queens along D12 — constrained to pin_d12
+        // Bishops and queens pinned on a diagonal
         var d12_pinned = (board.pieces[@intFromEnum(bishop_piece)] | board.pieces[@intFromEnum(queen_piece)]) & pin_d12;
         while (d12_pinned != 0) {
             const from: u6 = @intCast(@ctz(d12_pinned));
@@ -699,7 +636,7 @@ pub inline fn generate_legal_moves_with_info(board: *const types.Board, list: *l
         }
     }
 
-    // ---- Non-pinned diagonal sliders (bishops + queens) ----
+    // Non-pinned bishops and queens
     {
         const bishop_piece = if (us == types.Color.White) types.Piece.WHITE_BISHOP else types.Piece.BLACK_BISHOP;
         const queen_piece = if (us == types.Color.White) types.Piece.WHITE_QUEEN else types.Piece.BLACK_QUEEN;
@@ -717,7 +654,7 @@ pub inline fn generate_legal_moves_with_info(board: *const types.Board, list: *l
         }
     }
 
-    // ---- Non-pinned orthogonal sliders (rooks + queens) ----
+    // Non-pinned rooks and queens
     {
         const rook_piece = if (us == types.Color.White) types.Piece.WHITE_ROOK else types.Piece.BLACK_ROOK;
         const queen_piece = if (us == types.Color.White) types.Piece.WHITE_QUEEN else types.Piece.BLACK_QUEEN;
@@ -736,13 +673,13 @@ pub inline fn generate_legal_moves_with_info(board: *const types.Board, list: *l
     }
 }
 
-/// Generate only legal capture moves (for quiescence search).
+/// Generate legal captures and promotions for qsearch.
 pub fn generate_legal_captures(board: *const types.Board, list: *lists.MoveList, comptime color: types.Color) void {
     const info = compute_legal_info(board, color);
     const us = color;
-    const them = if (us == types.Color.White) types.Color.Black else types.Color.White;
+    const them = comptime us.other();
 
-    // Use cached occupancy from compute_legal_info
+    // Occupancy from compute_legal_info
     const us_bb = info.us_bb;
     const them_bb = info.them_bb;
     const occ = us_bb | them_bb;

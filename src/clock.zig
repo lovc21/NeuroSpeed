@@ -3,18 +3,13 @@ const builtin = @import("builtin");
 
 pub var io: std.Io = std.Io.Threaded.global_single_threaded.io();
 
-/// ns = (ticks * tsc_mult) >> tsc_shift — same fixed-point scheme the kernel
-/// uses. 0 means "no calibrated invariant counter": Timer uses the OS clock.
+/// ns = (ticks * tsc_mult) >> tsc_shift; 0 means Timer uses the OS clock.
 const tsc_shift = 24;
 var tsc_mult: u64 = 0;
-/// Counter ticks per millisecond, set alongside tsc_mult; used to build
-/// Deadlines without any per-check conversion.
+/// Counter ticks per millisecond, for building Deadlines.
 var tsc_ticks_per_ms: u64 = 0;
 
-/// Fixed-frequency, userspace-readable CPU counter. Only arches where such a
-/// counter architecturally exists are wired up; the rest return 0 and stay on
-/// the OS clock. riscv rdcycle is deliberately absent: it counts real cycles
-/// (varies with frequency scaling), so it can't back a wall clock.
+/// Fixed-frequency CPU counter readable from userspace, or 0 if the arch has none.
 inline fn readCounter() u64 {
     switch (comptime builtin.target.cpu.arch) {
         .x86_64 => {
@@ -26,8 +21,7 @@ inline fn readCounter() u64 {
             );
             return (@as(u64, hi) << 32) | lo;
         },
-        // Generic-timer virtual counter: the one sanctioned for EL0 reads
-        // (cntpct_el0 can trap on some kernels/hypervisors).
+        // Virtual counter; cntpct_el0 can trap on some kernels.
         .aarch64, .aarch64_be => {
             return asm volatile ("mrs %[ret], cntvct_el0"
                 : [ret] "=r" (-> u64),
@@ -40,8 +34,7 @@ inline fn readCounter() u64 {
 fn hasInvariantCounter() bool {
     switch (comptime builtin.target.cpu.arch) {
         .x86_64 => {
-            // CPUID.80000007H:EDX[8] = invariant TSC (constant rate across
-            // frequency scaling and C-states). Guard the leaf's existence.
+            // Invariant TSC is CPUID.80000007H:EDX[8], check that the leaf exists first.
             var max_leaf: u32 = undefined;
             asm volatile ("cpuid"
                 : [eax] "={eax}" (max_leaf),
@@ -66,8 +59,7 @@ fn osNowNs() i96 {
     return ts.toNanoseconds();
 }
 
-/// One calibration window: counter ticks vs OS-clock ns across a sleep.
-/// Returns the fixed-point multiplier, or null on any anomaly.
+/// Measure counter ticks against the OS clock over a sleep; null if the result looks wrong.
 fn calibrateOnce(window_ms: i64) ?u64 {
     const t0 = readCounter();
     const ns0 = osNowNs();
@@ -78,25 +70,20 @@ fn calibrateOnce(window_ms: i64) ?u64 {
     const ticks: u128 = t1 - t0;
     const ns: u128 = @intCast(ns1 - ns0);
     const mult = (ns << tsc_shift) / ticks;
-    // Plausible counter frequencies: 1 MHz (old ARM SoC timers run at
-    // 24 MHz; leave margin) up to 100 GHz.
+    // Accept counters from 1 MHz to 100 GHz.
     const min_mult: u128 = (1 << tsc_shift) / 100; // 100 GHz
     const max_mult: u128 = 1000 << tsc_shift; // 1 MHz
     if (mult < min_mult or mult > max_mult) return null;
     return @intCast(mult);
 }
 
-/// Calibrate the CPU counter against the OS clock: measure, then verify the
-/// result over an independent window; retry a few times before giving up and
-/// leaving the (always correct) OS-clock fallback active. Idempotent.
-/// Called from main(); costs ~25ms at startup on the happy path.
+/// Calibrate the counter against the OS clock, keeping the OS clock if that fails.
 pub fn init() void {
     if (tsc_mult != 0) return;
     if (!hasInvariantCounter()) return;
     for (0..3) |_| {
         const mult = calibrateOnce(20) orelse continue;
-        // Verify: over a 5ms window the counter-derived elapsed must agree
-        // with the OS clock within 1%.
+        // A second 5 ms window must agree with the OS clock within 1%.
         const t0 = readCounter();
         const ns0 = osNowNs();
         io.sleep(.fromMilliseconds(5), .awake) catch return;
@@ -112,9 +99,7 @@ pub fn init() void {
     }
 }
 
-/// Absolute time limit with zero conversion on the hot path: on the counter
-/// backend expired() is one counter read + compare (~7.5ns on x86_64), vs
-/// ~11ns for Timer.read() and ~18ns for the OS-clock fallback.
+/// Absolute time limit; on the counter backend expired() is one read and a compare.
 pub const Deadline = struct {
     ticks: u64, // absolute counter value (counter path)
     ns: i96, // absolute OS-clock value (fallback path)
@@ -153,14 +138,13 @@ pub fn usingCycleCounter() bool {
     return tsc_mult != 0;
 }
 
-/// Drop-in replacement for the removed std.time.Timer (monotonic).
+/// Monotonic timer.
 pub const Timer = struct {
     start_tsc: u64,
     start_ts: std.Io.Timestamp,
 
     pub fn start() Timer {
-        // Capture both clocks so read() stays correct even if init() runs
-        // between start() and read().
+        // Capture both clocks so read() works even if init() runs in between.
         return .{ .start_tsc = readCounter(), .start_ts = .now(io, .awake) };
     }
 
@@ -177,10 +161,7 @@ pub const Timer = struct {
     }
 };
 
-/// Replacement for std.time.milliTimestamp() where only differences matter
-/// (datagen progress). Monotonic, milliseconds. Deliberately stays on the
-/// OS clock: it is cold (a few reads per minute) and datagen runs for hours
-/// on a laptop, where raw counter behavior across suspend is undefined.
+/// Monotonic milliseconds from the OS clock, for datagen progress.
 pub fn nowMs() i64 {
     const ts: std.Io.Timestamp = .now(io, .awake);
     return ts.toMilliseconds();

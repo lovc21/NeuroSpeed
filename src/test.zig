@@ -12,14 +12,53 @@ const zobrist = @import("zobrist.zig");
 const nnue = @import("nnue.zig");
 const datagen = @import("datagen.zig");
 const clock = @import("clock.zig");
+const tm = @import("time_management.zig");
+const tt = @import("tt.zig");
+const search = @import("search.zig");
+const bench = @import("bench.zig");
 const print = std.debug.print;
 const expect = std.testing.expect;
+
+comptime {
+    _ = @import("memops");
+}
+
+test "time management budget matches reference vectors" {
+    // Vectors from an independent model of the budget arithmetic (overhead 10 ms, default tm_* params, increments counted in full).
+    const V = struct { time: u64, inc: u64, movestogo: ?u64, soft: u64, hard: u64 };
+    const vectors = [_]V{
+        .{ .time = 60000, .inc = 0, .movestogo = null, .soft = 1989, .hard = 27595 },
+        .{ .time = 60000, .inc = 1000, .movestogo = null, .soft = 3656, .hard = 27595 },
+        .{ .time = 180000, .inc = 2000, .movestogo = null, .soft = 9322, .hard = 82795 },
+        .{ .time = 1500, .inc = 0, .movestogo = null, .soft = 39, .hard = 685 },
+        .{ .time = 500, .inc = 0, .movestogo = null, .soft = 9, .hard = 225 },
+        .{ .time = 100, .inc = 0, .movestogo = null, .soft = 6, .hard = 41 },
+        .{ .time = 30, .inc = 0, .movestogo = null, .soft = 5, .hard = 9 },
+        .{ .time = 8, .inc = 0, .movestogo = null, .soft = 2, .hard = 2 },
+        .{ .time = 3, .inc = 0, .movestogo = null, .soft = 1, .hard = 1 },
+        .{ .time = 60000, .inc = 0, .movestogo = 30, .soft = 1400, .hard = 27595 },
+        .{ .time = 120000, .inc = 2000, .movestogo = 40, .soft = 3500, .hard = 55195 },
+        .{ .time = 2000, .inc = 50, .movestogo = 80, .soft = 63, .hard = 915 },
+        .{ .time = 60000, .inc = 10, .movestogo = null, .soft = 2006, .hard = 27595 },
+        .{ .time = 60000, .inc = 11, .movestogo = null, .soft = 2007, .hard = 27595 },
+    };
+    for (vectors) |v| {
+        const b = tm.time_management(v.time, v.inc, v.movestogo, 10);
+        try std.testing.expectEqual(v.soft, b.soft);
+        try std.testing.expectEqual(v.hard, b.hard);
+    }
+    // go-level shortcuts and side selection
+    try std.testing.expectEqual(tm.Budget{ .soft = 1000, .hard = 1000 }, tm.budget(.{ .movetime = 1000, .wtime = 5 }, .White, 10));
+    try std.testing.expectEqual(tm.Budget{}, tm.budget(.{ .infinite = true, .wtime = 60000 }, .White, 10));
+    try std.testing.expectEqual(tm.Budget{}, tm.budget(.{ .depth = 5, .wtime = 60000 }, .White, 10));
+    try std.testing.expectEqual(tm.Budget{ .soft = 1989, .hard = 27595 }, tm.budget(.{ .wtime = 60000, .btime = 1 }, .White, 10));
+    try std.testing.expectEqual(tm.Budget{ .soft = 1989, .hard = 27595 }, tm.budget(.{ .wtime = 1, .btime = 60000 }, .Black, 10));
+}
 
 test "clock: timer accuracy (cycle-counter path if available)" {
     clock.init();
     print("clock: cycle-counter path active = {}\n", .{clock.usingCycleCounter()});
-    // A 50ms sleep must measure as at least 50ms and not wildly more,
-    // whichever backend is active.
+    // A 50ms sleep must measure at least 50ms and not much more.
     var t: clock.Timer = .start();
     try clock.io.sleep(.fromMilliseconds(50), .awake);
     const ns = t.read();
@@ -49,60 +88,9 @@ test "test print bitboard" {
 }
 
 test "test print bitboard unicode" {
-    var b: types.Board = .{
-        .pieces = [_]types.Bitboard{0} ** types.Board.PieceCount,
-        .side = types.Color.Black,
-        .board = undefined,
-        .enpassant = types.square.e3,
-        .castle = @intFromEnum(types.Castle.WK) | @intFromEnum(types.Castle.WQ) | @intFromEnum(types.Castle.BK) | @intFromEnum(types.Castle.BQ),
-    };
-
-    // White pieces
-    // pawns
-    b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)], types.square.a2);
-    b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)], types.square.b2);
-    b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)], types.square.c2);
-    b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)], types.square.d2);
-    b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)], types.square.e2);
-    b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)], types.square.f2);
-    b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)], types.square.g2);
-    b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_PAWN)], types.square.h2);
-    // knights
-    b.pieces[@intFromEnum(types.Piece.WHITE_KNIGHT)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_KNIGHT)], types.square.b1);
-    b.pieces[@intFromEnum(types.Piece.WHITE_KNIGHT)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_KNIGHT)], types.square.g1);
-    // bishops
-    b.pieces[@intFromEnum(types.Piece.WHITE_BISHOP)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_BISHOP)], types.square.c1);
-    b.pieces[@intFromEnum(types.Piece.WHITE_BISHOP)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_BISHOP)], types.square.f1);
-    // rooks
-    b.pieces[@intFromEnum(types.Piece.WHITE_ROOK)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_ROOK)], types.square.a1);
-    b.pieces[@intFromEnum(types.Piece.WHITE_ROOK)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_ROOK)], types.square.h1);
-    // queen  king
-    b.pieces[@intFromEnum(types.Piece.WHITE_QUEEN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_QUEEN)], types.square.d1);
-    b.pieces[@intFromEnum(types.Piece.WHITE_KING)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.WHITE_KING)], types.square.e1);
-
-    // Black pieces
-    // pawns
-    b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)], types.square.a7);
-    b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)], types.square.b7);
-    b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)], types.square.c7);
-    b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)], types.square.d7);
-    b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)], types.square.e7);
-    b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)], types.square.f7);
-    b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)], types.square.g7);
-    b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_PAWN)], types.square.h7);
-    // knights
-    b.pieces[@intFromEnum(types.Piece.BLACK_KNIGHT)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_KNIGHT)], types.square.b8);
-    b.pieces[@intFromEnum(types.Piece.BLACK_KNIGHT)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_KNIGHT)], types.square.g8);
-    // bishops
-    b.pieces[@intFromEnum(types.Piece.BLACK_BISHOP)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_BISHOP)], types.square.c8);
-    b.pieces[@intFromEnum(types.Piece.BLACK_BISHOP)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_BISHOP)], types.square.f8);
-    // rooks
-    b.pieces[@intFromEnum(types.Piece.BLACK_ROOK)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_ROOK)], types.square.a8);
-    b.pieces[@intFromEnum(types.Piece.BLACK_ROOK)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_ROOK)], types.square.h8);
-    // queen  king
-    b.pieces[@intFromEnum(types.Piece.BLACK_QUEEN)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_QUEEN)], types.square.d8);
-    b.pieces[@intFromEnum(types.Piece.BLACK_KING)] = util.set_bit(b.pieces[@intFromEnum(types.Piece.BLACK_KING)], types.square.e8);
-
+    // Black to move, all castling rights and an ep square, so every FEN field is printed.
+    var b = types.Board.new();
+    try bitboard.parse_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR b KQkq e3 0 1", &b);
     bitboard.print_unicode_board(b);
 }
 
@@ -390,7 +378,8 @@ test "test fen parsing" {
         print("  occupancy: expected=0x{x}, actual=0x{x}\n", .{ expected.occupancy, b.pieces_combined() });
         print("  en-passant: expected={s}, actual={s}\n", .{ expected.ep_str, if (b.enpassant == types.square.NO_SQUARE) "-" else types.SquareString.getSquareToString(b.enpassant) });
         print("  castling   : expected=0b{b:0>4}, actual=0b{b:0>4}\n\n", .{ expected.castle, b.castle });
-        const flipped_occupancy: types.Bitboard = util.flip_bitboard_vertically(b.pieces_combined());
+        // The expected occupancies were written rank-8-first; @byteSwap flips rank 1 <-> rank 8.
+        const flipped_occupancy: types.Bitboard = @byteSwap(b.pieces_combined());
 
         try std.testing.expectEqual(
             expected.occupancy,
@@ -473,9 +462,9 @@ test "Perft Test the move generation start position" {
     try bitboard.parse_fen(types.start_position, &b);
 
     const stats = if (b.side == types.Color.White)
-        util.perft_detailed(types.Color.White, &b, depth)
+        util.Perft.run(types.Color.White, &b, depth, true)
     else
-        util.perft_detailed(types.Color.Black, &b, depth);
+        util.Perft.run(types.Color.Black, &b, depth, true);
 
     try std.testing.expectEqual(stats.nodes, 4865609);
     try std.testing.expectEqual(stats.captures, 82719);
@@ -497,9 +486,9 @@ test "Perft Test the move generation tricky position" {
     try bitboard.parse_fen(types.tricky_position, &b);
 
     const stats = if (b.side == types.Color.White)
-        util.perft_detailed(types.Color.White, &b, depth)
+        util.Perft.run(types.Color.White, &b, depth, true)
     else
-        util.perft_detailed(types.Color.Black, &b, depth);
+        util.Perft.run(types.Color.Black, &b, depth, true);
 
     try std.testing.expectEqual(stats.nodes, 4085603);
     try std.testing.expectEqual(stats.captures, 757163);
@@ -612,6 +601,53 @@ test "test phase calculation" {
     }
 }
 
+test "TT entry is 16 bytes and a cluster is one 64-byte cache line" {
+    // One probe must touch one cache line: 4 entries of 16 bytes.
+    try std.testing.expectEqual(@as(usize, 16), @sizeOf(tt.TTEntry));
+    try std.testing.expectEqual(@as(usize, 64), @sizeOf(tt.Cluster));
+    try std.testing.expectEqual(@as(usize, 4), tt.CLUSTER_SIZE);
+}
+
+test "TT hashfull stays within 0..1000 per mille" {
+    // Regression: @min(len, 1000) narrowed to u10 and sample * CLUSTER_SIZE overflowed.
+    var table = try tt.TT.init(std.testing.allocator, 1);
+    defer table.deinit();
+    try std.testing.expectEqual(@as(u32, 0), table.hashfull());
+    table.new_search();
+    var prng = std.Random.DefaultPrng.init(7);
+    const r = prng.random();
+    for (0..50_000) |_| table.store(r.int(u64), 1, 0, .EXACT, move_gen.Move.empty(), 0, false);
+    const hf = table.hashfull();
+    try expect(hf > 0);
+    try expect(hf <= 1000);
+    // Another search generation: nothing from the old one counts as "in use".
+    table.new_search();
+    try std.testing.expectEqual(@as(u32, 0), table.hashfull());
+}
+
+test "Zobrist keys are nonzero and pairwise distinct" {
+    // A zero key hides a piece from the hash, a duplicate makes positions collide.
+    var seen = std.AutoHashMap(u64, void).init(std.testing.allocator);
+    defer seen.deinit();
+    var count: usize = 0;
+    const add = struct {
+        fn f(set: *std.AutoHashMap(u64, void), n: *usize, key: u64) !void {
+            try expect(key != 0);
+            try expect(!set.contains(key));
+            try set.put(key, {});
+            n.* += 1;
+        }
+    }.f;
+    for (zobrist.piece_keys, 0..) |row, slot| {
+        if (slot == 6 or slot == 7 or slot == @intFromEnum(types.Piece.NO_PIECE)) continue; // padding rows
+        for (row) |k| try add(&seen, &count, k);
+    }
+    try add(&seen, &count, zobrist.side_key);
+    for ([_]u8{ 1, 2, 4, 8 }) |bit| try add(&seen, &count, zobrist.castle_hash[bit]); // single-right masks = raw keys
+    for (zobrist.ep_keys) |k| try add(&seen, &count, k);
+    try std.testing.expectEqual(@as(usize, 12 * 64 + 1 + 4 + 8), count);
+}
+
 test "Zobrist hash consistency after moves" {
     attacks.init_attacks();
 
@@ -693,12 +729,6 @@ test "Legal perft promo d5" {
     try run_perft_legal_bench(types.killer_position, "legal promo d5", 5, 36112837);
 }
 
-// --- Component speed benchmark over the six standard PERFT positions ---
-// Mirrors the UCI `speedbench` command; lets `zig build test` reproduce the
-// move generator / evaluation / search speeds for table tab:perft_positions.
-const search = @import("search.zig");
-const bench = @import("bench.zig");
-
 fn bench_eval_one(fen: []const u8, name: []const u8, iters: u64) !void {
     var board = types.Board.new();
     const m = try bench.measure_eval(&board, fen, iters);
@@ -743,9 +773,7 @@ test "test evaluation end games" {
         .{ .fen = "8/8/8/8/8/8/R7/K6k w - - 0 1", .description = "Rook vs King", .expected_result = "White wins", .expected_range = .{ 400, 600 } },
         .{ .fen = "8/8/8/8/8/8/8/KBN4k w - - 0 1", .description = "Bishop + Knight vs King", .expected_result = "White wins (difficult)", .expected_range = .{ 300, 700 } },
         .{ .fen = "8/8/8/8/8/8/8/KRR4k w - - 0 1", .description = "Two Rooks vs King", .expected_result = "White wins easily", .expected_range = .{ 900, 1200 } },
-        // Rook pawn with White's king behind it and Black's king outside the pawn's square:
-        // a win, but a static HCE scores a lone rook pawn conservatively (~83cp), so the floor
-        // is 50, not 100 — still asserting White is clearly better.
+        // Lone rook pawn with the defending king outside the square: HCE scores it low (~83cp), so the floor is 50.
         .{ .fen = "8/8/8/8/8/8/P7/K6k w - - 0 1", .description = "King + Pawn vs King", .expected_result = "Usually wins", .expected_range = .{ 50, 300 } },
     };
 
@@ -770,28 +798,6 @@ test "test evaluation end games" {
     }
 }
 
-// Build a board from a list of {piece_ordinal, square} pairs.
-fn nnue_mk_board(entries: []const [2]u8, side: types.Color) types.Board {
-    var b = types.Board.new();
-    for (entries) |e| {
-        const pc: usize = e[0];
-        const sq: u6 = @intCast(e[1]);
-        b.pieces[pc] |= @as(u64, 1) << sq;
-        b.board[sq] = @enumFromInt(pc);
-    }
-    b.side = side;
-    return b;
-}
-
-// Deterministic little-endian i16 fill, small range so eval cannot overflow.
-fn nnue_fill_net(buf: []u8) void {
-    var i: usize = 0;
-    while (i + 1 < buf.len) : (i += 2) {
-        const v: i16 = @as(i16, @intCast((i / 2) % 16)) - 8; // [-8, 7]
-        std.mem.writeInt(i16, buf[i..][0..2], v, .little);
-    }
-}
-
 test "nnue feature_index matches bullet Chess768 encoding (mirror=false)" {
     // White pawn (ord 0) on a1 (sq 0): friendly, no flip, bucket 0 -> 0
     try std.testing.expectEqual(@as(usize, 0), nnue.feature_index(true, 0, 0, false, 0));
@@ -812,21 +818,100 @@ test "nnue feature_index matches bullet Chess768 encoding (mirror=false)" {
 test "nnue evaluate is mirror-symmetric (encoding + eval are correct)" {
     const buf = try std.testing.allocator.alloc(u8, nnue.NET_BYTES);
     defer std.testing.allocator.free(buf);
-    nnue_fill_net(buf);
+    // deterministic little-endian i16 weights in [-8, 7] so eval cannot overflow
+    var i: usize = 0;
+    while (i + 1 < buf.len) : (i += 2) {
+        const v: i16 = @as(i16, @intCast((i / 2) % 16)) - 8;
+        std.mem.writeInt(i16, buf[i..][0..2], v, .little);
+    }
     try nnue.load_bytes(buf);
 
-    // P: WK e1, BK e8, WQ d1, BN b8, WP e2 — white to move.
-    const p = nnue_mk_board(&.{ .{ 5, 4 }, .{ 13, 60 }, .{ 4, 3 }, .{ 9, 57 }, .{ 0, 12 } }, types.Color.White);
-    // M: P vertically mirrored (sq ^ 56) with colours swapped (ord ^ 8), black to move.
-    const m = nnue_mk_board(&.{ .{ 13, 60 }, .{ 5, 4 }, .{ 12, 59 }, .{ 1, 1 }, .{ 8, 52 } }, types.Color.Black);
+    // p: WK e1, BK e8, WQ d1, BN b8, WP e2 with white to move
+    // m: p mirrored vertically (sq ^ 56) with colours swapped (piece ^ 8) and black to move
+    const pieces = [_][2]u8{ .{ 5, 4 }, .{ 13, 60 }, .{ 4, 3 }, .{ 9, 57 }, .{ 0, 12 } };
+    var p = types.Board.new();
+    var m = types.Board.new();
+    for (pieces) |e| {
+        const pc: usize = e[0];
+        const sq: u6 = @intCast(e[1]);
+        p.pieces[pc] |= @as(u64, 1) << sq;
+        p.board[sq] = @enumFromInt(pc);
+        m.pieces[pc ^ 8] |= @as(u64, 1) << (sq ^ 56);
+        m.board[sq ^ 56] = @enumFromInt(pc ^ 8);
+    }
+    p.side = .White;
+    m.side = .Black;
 
     // Same stm-relative score for any weights iff the perspective encoding is right.
     try std.testing.expectEqual(nnue.evaluate(&p), nnue.evaluate(&m));
 }
 
-test "datagen board_to_fen round-trips through parse_fen" {
-    // Serialize a parsed board, re-parse it, and require identical board state.
-    // This covers piece placement, side, castling, en passant and halfmove.
+// Every output bucket and side to move must score the same with the SIMD small head on and off.
+fn expect_small_heads_agree(acc: *const nnue.AccumulatorS) !void {
+    for ([_]types.Color{ .White, .Black }) |stm| {
+        for (0..nnue.OUTPUT_BUCKETS) |b| {
+            nnue.small_head_simd = true;
+            const simd = nnue.evaluate_acc_s(acc, stm, b);
+            nnue.small_head_simd = false;
+            try std.testing.expectEqual(nnue.evaluate_acc_s(acc, stm, b), simd);
+        }
+    }
+}
+
+// The routed eval (small net forced by the caller) plus all heads of the board's small accumulator.
+fn expect_small_heads_agree_board(board: *const types.Board) !void {
+    nnue.small_head_simd = true;
+    const simd = nnue.evaluate(board);
+    nnue.small_head_simd = false;
+    try std.testing.expectEqual(nnue.evaluate(board), simd);
+    var acc: nnue.AccumulatorS = undefined;
+    acc.refresh(board);
+    try expect_small_heads_agree(&acc);
+}
+
+test "nnue small-net SIMD head matches the scalar head" {
+    attacks.init_attacks();
+    try nnue.load_embedded();
+    // the shipped small net must pass the load-time |w| <= 128 check, else the SIMD head never runs
+    try expect(nnue.small_head_simd);
+    const saved_simd = nnue.small_head_simd;
+    const saved_guard = nnue.small_guard;
+    const saved_want = nnue.want_small;
+    defer {
+        nnue.small_head_simd = saved_simd;
+        nnue.small_guard = saved_guard;
+        nnue.want_small = saved_want;
+    }
+    // force the small net: no big-net re-eval in the guard band
+    nnue.want_small = true;
+    nnue.small_guard = 0;
+
+    // a saturated accumulator gives the largest head sums
+    var sat: nnue.AccumulatorS = .{};
+    for (&sat.vals) |*v| @memset(v, std.math.maxInt(i16));
+    try expect_small_heads_agree(&sat);
+
+    // the bench positions and all their legal children
+    for (bench.positions) |fen| {
+        var board = types.Board.new();
+        try bitboard.parse_fen(fen, &board);
+        try expect_small_heads_agree_board(&board);
+        var moves: lists.MoveList = .{};
+        if (board.side == types.Color.White) {
+            movegen.generate_legal_moves(&board, &moves, types.Color.White);
+        } else {
+            movegen.generate_legal_moves(&board, &moves, types.Color.Black);
+        }
+        for (moves.moves[0..moves.count]) |move| {
+            const undo = move_gen.make_move_search_rt(&board, move);
+            try expect_small_heads_agree_board(&board);
+            move_gen.unmake_move_search_rt(&board, move, undo);
+        }
+    }
+}
+
+test "board_to_fen round-trips through parse_fen" {
+    // Parse, serialize and re-parse; the board state must be identical.
     const fens = [_][]const u8{
         types.start_position,
         types.tricky_position,
@@ -844,7 +929,7 @@ test "datagen board_to_fen round-trips through parse_fen" {
         try bitboard.parse_fen(fen, &b1);
 
         // fullmove is not stored on the board, so it cannot affect round-trip state.
-        const out = datagen.board_to_fen(&b1, 1, buf[0..]);
+        const out = bitboard.board_to_fen(&b1, 1, buf[0..]);
 
         var b2 = types.Board.new();
         try bitboard.parse_fen(out, &b2);
@@ -863,12 +948,12 @@ test "datagen board_to_fen round-trips through parse_fen" {
     }
 }
 
-test "datagen board_to_fen exact start-position string" {
+test "board_to_fen exact start-position string" {
     var board = types.Board.new();
     try bitboard.parse_fen(types.start_position, &board);
 
     var buf: [128]u8 = undefined;
-    const fen = datagen.board_to_fen(&board, 1, buf[0..]);
+    const fen = bitboard.board_to_fen(&board, 1, buf[0..]);
     try std.testing.expectEqualStrings(
         "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
         fen,
@@ -876,12 +961,9 @@ test "datagen board_to_fen exact start-position string" {
 }
 
 test "bench is deterministic and nonzero" {
-    // The bench node count is the engine's reproducibility fingerprint
-    // (bench.zig). Run the UCI-bench subset twice at low depth: both runs
-    // must agree exactly (search determinism) and find real nodes.
     attacks.init_attacks();
     search.init_search();
-    search.init_tt(std.heap.page_allocator, 8);
+    try tt.init_global(std.heap.page_allocator, 8);
     try nnue.load_embedded();
     nnue.use_nnue = true;
 

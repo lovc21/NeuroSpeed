@@ -47,45 +47,9 @@ pub fn print_unicode_board(board: types.Board) void {
         }
         print("\n", .{});
     }
-    const side_str = switch (board.side) {
-        .White => "White",
-        .Black => "Black",
-        else => "Both",
-    };
-
-    var cast_buffer: [5]u8 = undefined;
-    var cast_len: usize = 0;
-    if (board.castle & @intFromEnum(types.Castle.WK) != 0) {
-        cast_buffer[cast_len] = 'K';
-        cast_len += 1;
-    }
-    if (board.castle & @intFromEnum(types.Castle.WQ) != 0) {
-        cast_buffer[cast_len] = 'Q';
-        cast_len += 1;
-    }
-    if (board.castle & @intFromEnum(types.Castle.BK) != 0) {
-        cast_buffer[cast_len] = 'k';
-        cast_len += 1;
-    }
-    if (board.castle & @intFromEnum(types.Castle.BQ) != 0) {
-        cast_buffer[cast_len] = 'q';
-        cast_len += 1;
-    }
-    if (cast_len == 0) {
-        cast_buffer[0] = '-';
-        cast_len = 1;
-    }
-    const cast_str = cast_buffer[0..cast_len];
-
-    const ep_str = if (board.enpassant == types.square.NO_SQUARE)
-        "-"
-    else
-        types.SquareString.getSquareToString(board.enpassant);
-
+    var fbuf: [128]u8 = undefined;
     print("\n     a b c d e f g h\n\n", .{});
-    print(" Side: {s}\n", .{side_str});
-    print(" En-passant: {s}\n", .{ep_str});
-    print(" Castling:   {s}\n", .{cast_str});
+    print(" FEN: {s}\n", .{board_to_fen(&board, 1, &fbuf)});
     print(" Phase white: {}, phase black: {}\n", .{ eval.global_evaluator.phase[0], eval.global_evaluator.phase[1] });
     print(" Bitboard: 0x{0x}\n", .{board.pieces_combined()});
     print(" Bitboard: 0b{b}\n\n", .{board.pieces_combined()});
@@ -136,6 +100,13 @@ pub fn is_square_attacked(
     };
 }
 
+// True if the king of `color` is attacked
+pub inline fn king_attacked(board: *const types.Board, comptime color: types.Color) bool {
+    const king = board.pieces[if (color == .White) types.Piece.WHITE_KING.toU4() else types.Piece.BLACK_KING.toU4()];
+    if (king == 0) return false;
+    return is_square_attacked(board, @intCast(@ctz(king)), comptime color.other());
+}
+
 pub const FenError = error{
     InvalidFormat,
     InvalidPosition,
@@ -170,21 +141,10 @@ pub fn parse_fen(fen: []const u8, board: *types.Board) !void {
             file += @intCast(c - '0');
             continue;
         }
-        const pe = switch (c) {
-            'P' => types.Piece.WHITE_PAWN,
-            'N' => types.Piece.WHITE_KNIGHT,
-            'B' => types.Piece.WHITE_BISHOP,
-            'R' => types.Piece.WHITE_ROOK,
-            'Q' => types.Piece.WHITE_QUEEN,
-            'K' => types.Piece.WHITE_KING,
-            'p' => types.Piece.BLACK_PAWN,
-            'n' => types.Piece.BLACK_KNIGHT,
-            'b' => types.Piece.BLACK_BISHOP,
-            'r' => types.Piece.BLACK_ROOK,
-            'q' => types.Piece.BLACK_QUEEN,
-            'k' => types.Piece.BLACK_KING,
-            else => return FenError.InvalidFormat,
-        };
+        // Reject the two gap glyphs and NO_PIECE.
+        const ord = std.mem.indexOfScalar(u8, types.PieceString, c) orelse return FenError.InvalidFormat;
+        if (ord == 6 or ord == 7 or ord >= @intFromEnum(types.Piece.NO_PIECE)) return FenError.InvalidFormat;
+        const pe: types.Piece = @enumFromInt(ord);
         if (rank >= 8 or file >= 8) return FenError.InvalidPosition;
         const sq_idx = (7 - rank) * 8 + file;
         const piece_index: usize = @intCast(@intFromEnum(pe));
@@ -212,13 +172,8 @@ pub fn parse_fen(fen: []const u8, board: *types.Board) !void {
     var mask: u8 = 0;
     if (!std.mem.eql(u8, castl, "-")) {
         for (castl) |c| {
-            switch (c) {
-                'K' => mask |= @intFromEnum(types.Castle.WK),
-                'Q' => mask |= @intFromEnum(types.Castle.WQ),
-                'k' => mask |= @intFromEnum(types.Castle.BK),
-                'q' => mask |= @intFromEnum(types.Castle.BQ),
-                else => return FenError.InvalidCastlingRights,
-            }
+            const i = std.mem.indexOfScalar(u8, types.CastleString, c) orelse return FenError.InvalidCastlingRights;
+            mask |= types.castle_bits[i];
         }
     }
     board.castle = mask;
@@ -243,6 +198,57 @@ pub fn parse_fen(fen: []const u8, board: *types.Board) !void {
 
     // Compute Zobrist hash from scratch
     board.hash = zobrist.compute_hash(board);
+}
+
+/// Serialize `board` to a standard 6-field FEN into `buf`; returns the written slice.
+pub fn board_to_fen(board: *const types.Board, fullmove: u32, buf: []u8) []u8 {
+    var w: std.Io.Writer = .fixed(buf);
+
+    // Piece placement: rank 8 (index 7) down to rank 1 (index 0), files a..h.
+    var rank: usize = 8;
+    while (rank > 0) {
+        rank -= 1;
+        var empties: u8 = 0;
+        var file: usize = 0;
+        while (file < 8) : (file += 1) {
+            const pc = board.board[rank * 8 + file];
+            if (pc == types.Piece.NO_PIECE) {
+                empties += 1;
+            } else {
+                if (empties > 0) {
+                    w.print("{d}", .{empties}) catch {};
+                    empties = 0;
+                }
+                w.writeByte(types.PieceString[@intFromEnum(pc)]) catch {};
+            }
+        }
+        if (empties > 0) w.print("{d}", .{empties}) catch {};
+        if (rank > 0) w.writeByte('/') catch {};
+    }
+
+    // Side to move
+    w.writeByte(' ') catch {};
+    w.writeByte(if (board.side == types.Color.White) 'w' else 'b') catch {};
+
+    // Castling rights (K Q k q order)
+    w.writeByte(' ') catch {};
+    if (board.castle == 0) w.writeByte('-') catch {};
+    for (types.CastleString, types.castle_bits) |c, bit| {
+        if (board.castle & bit != 0) w.writeByte(c) catch {};
+    }
+
+    // En passant target
+    w.writeByte(' ') catch {};
+    if (board.enpassant == types.square.NO_SQUARE) {
+        w.writeByte('-') catch {};
+    } else {
+        w.writeAll(types.SquareString.getSquareToString(board.enpassant)) catch {};
+    }
+
+    // Halfmove clock + fullmove number
+    w.print(" {d} {d}", .{ board.halfmove, fullmove }) catch {};
+
+    return w.buffered();
 }
 
 pub inline fn get_all_attackers(board: *const types.Board, square: u6, occupied: u64) u64 {

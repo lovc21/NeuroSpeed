@@ -1,82 +1,85 @@
 const std = @import("std");
+const manifest = @import("build.zig.zon");
 
-// Although this function looks imperative, note that its job is to
-// declaratively construct a build graph that will be executed by an external
-// runner.
+const nets = [_][]const u8{ "big_nnuev3", "small_nnuev3" };
+
 pub fn build(b: *std.Build) void {
-    // Standard target options allows the person running `zig build` to choose
-    // what target to build for. Here we do not override the defaults, which
-    // means any target is allowed, and the default is native. Other options
-    // for restricting supported target set are available.
     const target = b.standardTargetOptions(.{});
-
-    // Standard optimization options allow the person running `zig build` to select
-    // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
-    // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    const exe = b.addExecutable(.{
-        .name = "NeuroSpeed",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
+    // Engine version comes from build.zig.zon
+    const options = b.addOptions();
+    options.addOption([]const u8, "version", manifest.version);
+
+    const engine_mod = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .single_threaded = true,
     });
-    // Keep relocations in the final binary so llvm-bolt can re-lay-out hot
-    // code (see bolt.sh). Costs only file size, never runtime.
-    exe.link_emit_relocs = true;
+    const test_mod = b.createModule(.{
+        .root_source_file = b.path("src/test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .single_threaded = true,
+    });
+    const memops_mod = b.createModule(.{
+        .root_source_file = b.path("src/memops.zig"),
+        .target = target,
+        .optimize = optimize,
+        .single_threaded = true,
+        .no_builtin = true,
+    });
 
-    // The NNUE nets live in nets/ (outside the src/ module root), so they are
-    // registered as anonymous imports — @embedFile("big_nnuev3") in nnue.zig
-    // resolves through these.
-    exe.root_module.addAnonymousImport("big_nnuev3", .{ .root_source_file = b.path("nets/big_nnuev3.bin") });
-    exe.root_module.addAnonymousImport("small_nnuev3", .{ .root_source_file = b.path("nets/small_nnuev3.bin") });
-
-    // This declares intent for the executable to be installed into the
-    // standard location when the user invokes the "install" step (the default
-    // step when running `zig build`).
-    b.installArtifact(exe);
-
-    // This *creates* a Run step in the build graph, to be executed when another
-    // step is evaluated that depends on it. The next line below will establish
-    // such a dependency.
-    const run_cmd = b.addRunArtifact(exe);
-
-    // By making the run step depend on the install step, it will be run from the
-    // installation directory rather than directly from within the cache directory.
-    // This is not necessary, however, if the application depends on other installed
-    // files, this ensures they will be present and in the expected location.
-    run_cmd.step.dependOn(b.getInstallStep());
-
-    // This allows the user to pass arguments to the application in the build
-    // command itself, like this: `zig build run -- arg1 arg2 etc`
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
+    for ([_]*std.Build.Module{ engine_mod, test_mod }) |module| {
+        module.addOptions("build_options", options);
+        module.addImport("memops", memops_mod);
+        for (nets) |name| {
+            module.addAnonymousImport(name, .{ .root_source_file = b.path(b.fmt("nets/{s}.bin", .{name})) });
+        }
     }
 
-    // This creates a build step. It will be visible in the `zig build --help` menu,
-    // and can be selected like this: `zig build run`
-    // This will evaluate the `run` step rather than the default, which is "install".
-    const run_step = b.step("run", "Run the app");
-    run_step.dependOn(&run_cmd.step);
+    const exe = b.addExecutable(.{ .name = "NeuroSpeed", .root_module = engine_mod });
+    // Keep relocations so llvm-bolt can re-lay-out hot code (`just build-bolt`).
+    exe.link_emit_relocs = true;
+    b.installArtifact(exe);
 
-    const exe_unit_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/test.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
+    // zig build check (run compiler diagnostics, nothing installed)
+    const exe_check = b.addExecutable(.{ .name = "NeuroSpeed", .root_module = engine_mod });
+    const test_check = b.addTest(.{ .root_module = test_mod });
+    const check = b.step("check", "Compile engine and tests (editor diagnostics, nothing installed)");
+    check.dependOn(&exe_check.step);
+    check.dependOn(&test_check.step);
+
+    const unit_tests = b.addTest(.{
+        .root_module = test_mod,
+        .test_runner = .{
+            .path = .{ .cwd_relative = b.graph.zig_lib_directory.join(b.allocator, &.{ "compiler", "test_runner.zig" }) catch @panic("OOM") },
+            .mode = .simple,
+        },
     });
+    b.step("test", "Run unit tests").dependOn(&b.addRunArtifact(unit_tests).step);
 
-    exe_unit_tests.root_module.addAnonymousImport("big_nnuev3", .{ .root_source_file = b.path("nets/big_nnuev3.bin") });
-    exe_unit_tests.root_module.addAnonymousImport("small_nnuev3", .{ .root_source_file = b.path("nets/small_nnuev3.bin") });
+    // zig build run [-- args]
+    const run_cmd = b.addRunArtifact(exe);
+    run_cmd.step.dependOn(b.getInstallStep());
+    if (b.args) |args| run_cmd.addArgs(args);
+    b.step("run", "Run the engine").dependOn(&run_cmd.step);
 
-    const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
+    // zig build bench: UCI `bench` node-count fingerprint
+    const bench_run = b.addRunArtifact(exe);
+    bench_run.setStdIn(.{ .bytes = "bench\nquit\n" });
+    b.step("bench", "Node-count fingerprint (UCI bench: 5 positions, depth 11)").dependOn(&bench_run.step);
 
-    // Similar to creating the run step earlier, this exposes a `test` step to
-    // the `zig build --help` menu, providing a way for the user to request
-    // running the unit tests.
-    const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&run_exe_unit_tests.step);
+    // zig build speedbench [-- depth] (movegen / eval / search speeds)
+    const speed_depth: []const u8 = if (b.args) |args| (if (args.len > 0) args[0] else "6") else "6";
+    const speed_run = b.addRunArtifact(exe);
+    speed_run.setStdIn(.{ .bytes = b.fmt("speedbench {s}\nquit\n", .{speed_depth}) });
+    b.step("speedbench", "Thesis component speeds: movegen / eval / search (optional: -- <depth>)").dependOn(&speed_run.step);
+
+    // zig build datagen -- [options] (generate self-play training data)
+    const datagen_args: []const u8 = if (b.args) |args| std.mem.join(b.allocator, " ", args) catch @panic("OOM") else "--help";
+    const datagen_run = b.addRunArtifact(exe);
+    datagen_run.setStdIn(.{ .bytes = b.fmt("datagen {s}\nquit\n", .{datagen_args}) });
+    b.step("datagen", "Generate self-play training data: zig build datagen -- --games N --out FILE ...").dependOn(&datagen_run.step);
 }

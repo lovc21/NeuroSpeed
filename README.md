@@ -14,9 +14,9 @@ This chess engine is still in development (pre-1.0). A stable v1.0 release will 
 
 ## Strength
 
-| Version | Date       | Estimated Elo |
-|---------|------------|---------------|
-| pre-1.0 | 2026-03-03 | 2100 - 2300   |
+| Version | Date       | Elo                                   |
+| ------- | ---------- | ------------------------------------- |
+| 1.0     | 2026-09-10 | ~3160 ±70 (internal Stockfish-anchored gauntlet, 8+0.08) |
 
 ## Features
 
@@ -58,7 +58,7 @@ Insufficient material draw detection
 
 ## How to build
 
-Requires [Zig](https://ziglang.org/download/) (0.14+) and [just](https://github.com/casey/just).
+Requires [Zig](https://ziglang.org/download/) 0.16 or newer and [just](https://github.com/casey/just).
 
 ```bash
 # Build optimized binary for your machine
